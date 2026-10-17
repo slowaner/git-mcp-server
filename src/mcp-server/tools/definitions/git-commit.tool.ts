@@ -95,13 +95,13 @@ const OutputSchema = z.object({
   signed: z
     .boolean()
     .describe(
-      'Whether the commit was signed. False when GIT_SIGN_COMMITS=false or when signing was attempted and fell back to unsigned on failure.',
+      'Whether the created commit contains a signature, including signing through native Git configuration. Signature validity is not verified.',
     ),
   signingWarning: z
     .string()
     .optional()
     .describe(
-      'Populated only when signing was requested but failed, and the commit was created unsigned as a fallback.',
+      'Populated when an explicit signing attempt failed and creation was retried using native Git configuration. The retry may still produce a signature.',
     ),
   status: z
     .object({

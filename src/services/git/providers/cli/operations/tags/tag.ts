@@ -109,26 +109,45 @@ export async function executeTag(
           throw new Error('Tag name is required for create operation');
         }
 
-        // Signing policy: attempt when GIT_SIGN_COMMITS is enabled, fall
-        // back to unsigned silently on failure. `signed` in the result
-        // reflects the actual outcome so callers can observe fallback.
+        // Leave native signing configuration active, including on retry.
+        // A configured signed tag needs a message even when none was supplied.
         const signRequested = shouldSignCommits();
-        let signed = false;
         let signingWarning: string | undefined;
+
+        let nativeSigning = false;
+        if (!options.message && !options.annotated) {
+          const configResult = await execGit(
+            buildGitCommand({
+              command: 'config',
+              args: ['--type=bool', '--get', 'tag.gpgSign'],
+            }),
+            context.workingDirectory,
+            context.requestContext,
+            { allowNonZeroExit: true },
+          );
+          const exitCode = configResult.exitCode ?? 0;
+          if (exitCode !== 0 && exitCode !== 1) {
+            throw new Error(
+              `Could not read tag.gpgSign: ${configResult.stderr}`,
+            );
+          }
+          nativeSigning =
+            exitCode === 0 && configResult.stdout.trim() === 'true';
+        }
 
         const buildCreateArgs = (sign: boolean): string[] => {
           const createArgs: string[] = [options.tagName!];
 
           if (sign) {
-            const message = options.message || `Tag ${options.tagName}`;
-            createArgs.push('-s', `--message=${message}`);
-          } else if (options.message) {
-            createArgs.push('-a', `--message=${options.message}`);
-          } else if (options.annotated) {
-            // Annotated without message — git would open an editor,
-            // which doesn't work in MCP context. Use tag name as default message.
-            createArgs.push('-a', `--message=Tag ${options.tagName}`);
+            createArgs.push('-s');
           }
+          if (options.message) {
+            createArgs.push(`--message=${options.message}`);
+          } else if (sign || options.annotated || nativeSigning) {
+            createArgs.push(`--message=Tag ${options.tagName}`);
+          }
+          // --message implies annotation without -a, which would override
+          // native tag.forceSignAnnotated configuration.
 
           if (options.commit) {
             createArgs.push(options.commit);
@@ -141,18 +160,8 @@ export async function executeTag(
           return createArgs;
         };
 
-        // When not signing, override git config that might force signing/annotation
-        // (e.g., tag.gpgSign=true) which would open an editor in non-interactive MCP context
-        const buildCmd = (sign: boolean): string[] => {
-          const configOverride = sign ? [] : ['-c', 'tag.gpgSign=false'];
-          return [
-            ...configOverride,
-            ...buildGitCommand({
-              command: 'tag',
-              args: buildCreateArgs(sign),
-            }),
-          ];
-        };
+        const buildCmd = (sign: boolean): string[] =>
+          buildGitCommand({ command: 'tag', args: buildCreateArgs(sign) });
 
         try {
           await execGit(
@@ -160,7 +169,6 @@ export async function executeTag(
             context.workingDirectory,
             context.requestContext,
           );
-          signed = signRequested;
         } catch (error) {
           if (!signRequested) {
             throw error;
@@ -168,16 +176,37 @@ export async function executeTag(
           const errorMessage =
             error instanceof Error ? error.message : String(error);
           logger.warning(
-            'Tag signing failed; retrying unsigned. Set GIT_SIGN_COMMITS=false to suppress this attempt.',
+            'Explicit tag signing failed; retrying with native Git configuration. Set GIT_SIGN_COMMITS=false to defer to Git from the first attempt.',
             { ...context.requestContext, error },
           );
-          signingWarning = `GIT_SIGN_COMMITS is enabled but signing failed; tag created unsigned. Check signing key availability (gpg-agent running, SSH key accessible). Underlying error: ${errorMessage}`;
+          signingWarning = `Explicit tag signing failed; retried with native Git configuration. Check signing key availability (gpg-agent running, SSH key accessible). Underlying error: ${errorMessage}`;
           await execGit(
             buildCmd(false),
             context.workingDirectory,
             context.requestContext,
           );
         }
+
+        // Inspect the tag itself, without verifying trust or dereferencing a
+        // lightweight tag to a potentially signed commit.
+        const signatureResult = await execGit(
+          buildGitCommand({
+            command: 'for-each-ref',
+            args: [
+              `--format=%(objecttype)${GIT_FIELD_DELIMITER}%(contents:signature)`,
+              `refs/tags/${options.tagName}`,
+            ],
+          }),
+          context.workingDirectory,
+          context.requestContext,
+        );
+        const [objectType, signature] = signatureResult.stdout
+          .trimEnd()
+          .split(GIT_FIELD_DELIMITER);
+        if (!objectType) {
+          throw new Error(`Could not inspect created tag: ${options.tagName}`);
+        }
+        const signed = objectType === 'tag' && Boolean(signature?.trim());
 
         const createResult: GitTagResult = {
           mode: 'create' as const,

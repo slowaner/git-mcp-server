@@ -40,7 +40,10 @@ describe('executeCommit', () => {
   let mockExecGit: ReturnType<typeof vi.fn<ExecGitFn>>;
 
   beforeEach(() => {
-    mockExecGit = vi.fn<ExecGitFn>();
+    mockExecGit = vi.fn<ExecGitFn>().mockResolvedValue({
+      stdout: 'tree abc\nauthor Test\ncommitter Test\n\nmessage\n',
+      stderr: '',
+    });
   });
 
   describe('basic commit', () => {
@@ -105,7 +108,7 @@ describe('executeCommit', () => {
         mockExecGit,
       );
 
-      expect(mockExecGit).toHaveBeenCalledTimes(4);
+      expect(mockExecGit).toHaveBeenCalledTimes(5);
       // First call should be git add
       const [addArgs] = mockExecGit.mock.calls[0]!;
       expect(addArgs).toContain('add');
@@ -132,7 +135,7 @@ describe('executeCommit', () => {
         mockExecGit,
       );
 
-      expect(mockExecGit).toHaveBeenCalledTimes(3);
+      expect(mockExecGit).toHaveBeenCalledTimes(4);
       const [commitArgs] = mockExecGit.mock.calls[0]!;
       expect(commitArgs).toContain('commit');
     });
@@ -148,7 +151,7 @@ describe('executeCommit', () => {
 
       await executeCommit({ message: 'test' }, mockContext, mockExecGit);
 
-      expect(mockExecGit).toHaveBeenCalledTimes(3);
+      expect(mockExecGit).toHaveBeenCalledTimes(4);
       const [commitArgs] = mockExecGit.mock.calls[0]!;
       expect(commitArgs).toContain('commit');
     });
@@ -250,6 +253,11 @@ describe('executeCommit', () => {
         .mockResolvedValueOnce({
           stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
           stderr: '',
+        })
+        .mockResolvedValueOnce({
+          stdout:
+            'tree abc\ngpgsig -----BEGIN SSH SIGNATURE-----\n body\n\nmessage',
+          stderr: '',
         });
 
       const result = await executeCommit(
@@ -306,7 +314,7 @@ describe('executeCommit', () => {
         mockExecGit,
       );
 
-      expect(mockExecGit).toHaveBeenCalledTimes(4);
+      expect(mockExecGit).toHaveBeenCalledTimes(5);
       // Second call (retry) should not contain --gpg-sign
       const [retryArgs] = mockExecGit.mock.calls[1]!;
       expect(retryArgs).toContain('commit');
@@ -327,6 +335,106 @@ describe('executeCommit', () => {
       ).rejects.toThrow();
 
       expect(mockExecGit).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('native signature inspection', () => {
+    for (const header of ['gpgsig', 'gpgsig-sha256']) {
+      it(`reports native signing from ${header} without forcing signing`, async () => {
+        mockExecGit
+          .mockResolvedValueOnce({ stdout: '', stderr: '' })
+          .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
+          .mockResolvedValueOnce({
+            stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
+            stderr: '',
+          })
+          .mockResolvedValueOnce({
+            stdout: `tree abc\n${header} -----BEGIN SSH SIGNATURE-----\n body\n\nmessage`,
+            stderr: '',
+          });
+
+        const result = await executeCommit(
+          { message: 'native signature' },
+          mockContext,
+          mockExecGit,
+        );
+        expect(mockExecGit.mock.calls[0]![0]).not.toContain('--gpg-sign');
+        expect(result.signed).toBe(true);
+        expect(result.signingWarning).toBeUndefined();
+        expect(mockExecGit.mock.calls[3]![0]).toEqual([
+          'cat-file',
+          'commit',
+          'abc123',
+        ]);
+      });
+    }
+
+    it('does not count signature-like text in the commit message', async () => {
+      mockExecGit
+        .mockResolvedValueOnce({ stdout: '', stderr: '' })
+        .mockResolvedValueOnce({ stdout: 'abc123', stderr: '' })
+        .mockResolvedValueOnce({
+          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          stdout: 'tree abc\n\nmessage\ngpgsig -----BEGIN SSH SIGNATURE-----',
+          stderr: '',
+        });
+      expect(
+        (await executeCommit({ message: 'message' }, mockContext, mockExecGit))
+          .signed,
+      ).toBe(false);
+    });
+
+    it('reports a signature produced by native config on retry', async () => {
+      (
+        shouldSignCommits as unknown as {
+          mockReturnValueOnce: (v: boolean) => void;
+        }
+      ).mockReturnValueOnce(true);
+      mockExecGit
+        .mockRejectedValueOnce(new Error('signing failed once'))
+        .mockResolvedValueOnce({ stdout: '', stderr: '' })
+        .mockResolvedValueOnce({ stdout: 'abc123', stderr: '' })
+        .mockResolvedValueOnce({
+          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          stdout: 'tree abc\ngpgsig signature\n\nmessage',
+          stderr: '',
+        });
+      const result = await executeCommit(
+        { message: 'retry' },
+        mockContext,
+        mockExecGit,
+      );
+      expect(mockExecGit.mock.calls[1]![0]).not.toContain('--gpg-sign');
+      expect(result.signed).toBe(true);
+      expect(result.signingWarning).toContain('native Git configuration');
+    });
+
+    it('does not retry creation after a signature read fails', async () => {
+      (
+        shouldSignCommits as unknown as {
+          mockReturnValueOnce: (v: boolean) => void;
+        }
+      ).mockReturnValueOnce(true);
+      mockExecGit
+        .mockResolvedValueOnce({ stdout: '', stderr: '' })
+        .mockResolvedValueOnce({ stdout: 'abc123', stderr: '' })
+        .mockResolvedValueOnce({
+          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
+          stderr: '',
+        })
+        .mockRejectedValueOnce(new Error('object read failed'));
+      await expect(
+        executeCommit({ message: 'test' }, mockContext, mockExecGit),
+      ).rejects.toThrow(/object read failed/);
+      expect(
+        mockExecGit.mock.calls.filter(([args]) => args[0] === 'commit'),
+      ).toHaveLength(1);
     });
   });
 
@@ -427,7 +535,7 @@ describe('executeCommit', () => {
   });
 
   describe('execution order', () => {
-    it('calls commit, then rev-parse, then show in sequence', async () => {
+    it('calls commit, then rev-parse, show, and signature inspection in sequence', async () => {
       mockExecGit
         .mockResolvedValueOnce({ stdout: '', stderr: '' })
         .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
@@ -438,7 +546,7 @@ describe('executeCommit', () => {
 
       await executeCommit({ message: 'test' }, mockContext, mockExecGit);
 
-      expect(mockExecGit).toHaveBeenCalledTimes(3);
+      expect(mockExecGit).toHaveBeenCalledTimes(4);
 
       // First call: commit
       const [commitArgs] = mockExecGit.mock.calls[0]!;

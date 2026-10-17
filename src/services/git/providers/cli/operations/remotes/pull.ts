@@ -51,9 +51,9 @@ export async function executePull(
       args.push('--ff-only');
     }
 
-    // Pull itself doesn't honor commit.gpgsign — `-S` must be passed explicitly
-    // so the underlying merge/rebase signs any commit it produces. Fast-forward
-    // pulls don't create commits; `-S` is a no-op there and safe to include.
+    // Request signing explicitly when enabled. Otherwise the underlying
+    // merge/rebase inherits native Git configuration. Fast-forward pulls
+    // create no commits, so the signing flag has no effect there.
     if (shouldSignCommits()) {
       args.push('-S');
     }

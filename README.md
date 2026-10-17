@@ -52,7 +52,8 @@ Works with both Bun and Node.js. Runtime is auto-detected.
 
 ### MCP client configuration
 
-Add the following to your MCP client config (e.g., `cline_mcp_settings.json`). Update the environment variables to match your setup — especially the git identity fields.
+Add the following to your MCP client config (e.g., `cline_mcp_settings.json`). Update the environment variables to match
+your setup — especially the git identity fields.
 
 ```json
 {
@@ -83,20 +84,20 @@ For Streamable HTTP, set `MCP_TRANSPORT_TYPE=http` and `MCP_HTTP_PORT=3015`.
 
 Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 
-| Feature                      | Details                                                                                                                                                                               |
-| :--------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Declarative tools            | Define capabilities in single, self-contained files. The framework handles registration, validation, and execution.                                                                   |
-| Error handling               | Unified `McpError` system for consistent, structured error responses.                                                                                                                 |
-| Authentication               | Supports `none`, `jwt`, and `oauth` modes.                                                                                                                                            |
-| Pluggable storage            | Swap backends (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2`) without changing business logic.                                                                            |
-| Observability                | Structured logging (Pino) and optional auto-instrumented OpenTelemetry for traces and metrics.                                                                                        |
-| Dependency injection         | Built with `tsyringe` for decoupled, testable architecture.                                                                                                                           |
-| Cross-runtime                | Auto-detects Bun or Node.js and uses the appropriate process spawning method.                                                                                                         |
-| Provider architecture        | Pluggable git provider system. Current: CLI. Planned: isomorphic-git for edge deployment.                                                                                             |
-| Working directory management | Session-specific directory context for multi-repo workflows.                                                                                                                          |
-| Configurable git identity    | Override author/committer info via environment variables, with fallback to global git config.                                                                                         |
-| Commit signing               | GPG/SSH signing (enabled by default) for commits, merges, rebases, cherry-picks, and tags. Silent fallback to unsigned on failure with `signed`/`signingWarning` fields in responses. |
-| Safety                       | Destructive operations (`git clean`, `git reset --hard`) require explicit confirmation flags.                                                                                         |
+| Feature                      | Details                                                                                                                                                                                                                           |
+| :--------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Declarative tools            | Define capabilities in single, self-contained files. The framework handles registration, validation, and execution.                                                                                                               |
+| Error handling               | Unified `McpError` system for consistent, structured error responses.                                                                                                                                                             |
+| Authentication               | Supports `none`, `jwt`, and `oauth` modes.                                                                                                                                                                                        |
+| Pluggable storage            | Swap backends (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2`) without changing business logic.                                                                                                                        |
+| Observability                | Structured logging (Pino) and optional auto-instrumented OpenTelemetry for traces and metrics.                                                                                                                                    |
+| Dependency injection         | Built with `tsyringe` for decoupled, testable architecture.                                                                                                                                                                       |
+| Cross-runtime                | Auto-detects Bun or Node.js and uses the appropriate process spawning method.                                                                                                                                                     |
+| Provider architecture        | Pluggable git provider system. Current: CLI. Planned: isomorphic-git for edge deployment.                                                                                                                                         |
+| Working directory management | Session-specific directory context for multi-repo workflows.                                                                                                                                                                      |
+| Configurable git identity    | Override author/committer info via environment variables, with fallback to global git config.                                                                                                                                     |
+| Commit signing               | Explicit signing by default for commits, tags, merges, rebases, cherry-picks, and pulls. Set `GIT_SIGN_COMMITS=false` to follow native Git signing config. Commit/tag retries report actual `signed` status and `signingWarning`. |
+| Safety                       | Destructive operations (`git clean`, `git reset --hard`) require explicit confirmation flags.                                                                                                                                     |
 
 ## Security
 
@@ -109,28 +110,38 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 
 ## Configuration
 
+For native signing policy, set `GIT_SIGN_COMMITS=false`. The CLI provider
+preserves Git's system, global, repository, and conditional-include configuration,
+including `commit.gpgSign`, `tag.gpgSign`, `tag.forceSignAnnotated`, `gpg.format`,
+and `user.signingKey`. It does not disable signing or choose a different key.
+Configured signing failures propagate. With `GIT_SIGN_COMMITS=true` (the default),
+signing is explicitly requested; only commit/tag creation retries a failure
+without that explicit request, leaving native configuration active. The retry
+can still sign or fail. Commit/tag `signed` reports signature presence, not trust
+verification; `signingWarning` reports a retry.
+
 All configuration is validated at startup in `src/config/index.ts`. Key environment variables:
 
-| Variable                       | Description                                                                                                                                       | Default     |
-| :----------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------ | :---------- |
-| `MCP_TRANSPORT_TYPE`           | Transport: `stdio` or `http`.                                                                                                                     | `stdio`     |
-| `MCP_SESSION_MODE`             | HTTP session mode: `stateless`, `stateful`, or `auto`.                                                                                            | `auto`      |
-| `MCP_RESPONSE_FORMAT`          | Response format: `json` (LLM-optimized), `markdown` (human-readable), or `auto`.                                                                  | `json`      |
-| `MCP_RESPONSE_VERBOSITY`       | Detail level: `minimal`, `standard`, or `full`.                                                                                                   | `standard`  |
-| `MCP_HTTP_PORT`                | HTTP server port.                                                                                                                                 | `3015`      |
-| `MCP_HTTP_HOST`                | HTTP server hostname.                                                                                                                             | `127.0.0.1` |
-| `MCP_HTTP_ENDPOINT_PATH`       | MCP request endpoint path.                                                                                                                        | `/mcp`      |
-| `MCP_AUTH_MODE`                | Authentication mode: `none`, `jwt`, or `oauth`.                                                                                                   | `none`      |
-| `STORAGE_PROVIDER_TYPE`        | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv`, `r2`.                                                                    | `in-memory` |
-| `OTEL_ENABLED`                 | Enable OpenTelemetry.                                                                                                                             | `false`     |
-| `MCP_LOG_LEVEL`                | Minimum log level: `debug`, `info`, `warn`, `error`.                                                                                              | `info`      |
-| `GIT_SIGN_COMMITS`             | GPG/SSH signing for commits, merges, rebases, cherry-picks, and tags. Falls back to unsigned on failure (see response `signed`/`signingWarning`). | `true`      |
-| `GIT_AUTHOR_NAME`              | Git author name. Aliases: `GIT_USERNAME`, `GIT_USER`. Falls back to global git config.                                                            | `(none)`    |
-| `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                        | `(none)`    |
-| `GIT_BASE_DIR`                 | Absolute path to restrict all git operations to a specific directory tree.                                                                        | `(none)`    |
-| `GIT_WRAPUP_INSTRUCTIONS_PATH` | Path to custom markdown file with workflow instructions.                                                                                          | `(none)`    |
-| `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ character secret key.                                                                                                | `(none)`    |
-| `OAUTH_ISSUER_URL`             | Required for `oauth` auth. OIDC provider URL.                                                                                                     | `(none)`    |
+| Variable                       | Description                                                                                                                                                                                                  | Default     |
+| :----------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :---------- |
+| `MCP_TRANSPORT_TYPE`           | Transport: `stdio` or `http`.                                                                                                                                                                                | `stdio`     |
+| `MCP_SESSION_MODE`             | HTTP session mode: `stateless`, `stateful`, or `auto`.                                                                                                                                                       | `auto`      |
+| `MCP_RESPONSE_FORMAT`          | Response format: `json` (LLM-optimized), `markdown` (human-readable), or `auto`.                                                                                                                             | `json`      |
+| `MCP_RESPONSE_VERBOSITY`       | Detail level: `minimal`, `standard`, or `full`.                                                                                                                                                              | `standard`  |
+| `MCP_HTTP_PORT`                | HTTP server port.                                                                                                                                                                                            | `3015`      |
+| `MCP_HTTP_HOST`                | HTTP server hostname.                                                                                                                                                                                        | `127.0.0.1` |
+| `MCP_HTTP_ENDPOINT_PATH`       | MCP request endpoint path.                                                                                                                                                                                   | `/mcp`      |
+| `MCP_AUTH_MODE`                | Authentication mode: `none`, `jwt`, or `oauth`.                                                                                                                                                              | `none`      |
+| `STORAGE_PROVIDER_TYPE`        | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv`, `r2`.                                                                                                                               | `in-memory` |
+| `OTEL_ENABLED`                 | Enable OpenTelemetry.                                                                                                                                                                                        | `false`     |
+| `MCP_LOG_LEVEL`                | Minimum log level: `debug`, `info`, `warn`, `error`.                                                                                                                                                         | `info`      |
+| `GIT_SIGN_COMMITS`             | Explicit signing for commits, tags, merges, rebases, cherry-picks, and pulls; `false` defers to native Git config. Only commit/tag retries remove the explicit signing flag (see `signed`/`signingWarning`). | `true`      |
+| `GIT_AUTHOR_NAME`              | Git author name. Aliases: `GIT_USERNAME`, `GIT_USER`. Falls back to global git config.                                                                                                                       | `(none)`    |
+| `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                                                                                   | `(none)`    |
+| `GIT_BASE_DIR`                 | Absolute path to restrict all git operations to a specific directory tree.                                                                                                                                   | `(none)`    |
+| `GIT_WRAPUP_INSTRUCTIONS_PATH` | Path to custom markdown file with workflow instructions.                                                                                                                                                     | `(none)`    |
+| `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ character secret key.                                                                                                                                                           | `(none)`    |
+| `OAUTH_ISSUER_URL`             | Required for `oauth` auth. OIDC provider URL.                                                                                                                                                                | `(none)`    |
 
 ## Running the server
 
@@ -208,7 +219,9 @@ Markdown format (human-readable):
 - package.json
 ```
 
-The LLM always receives the complete structured data via `responseFormatter` — full file lists, metadata, timestamps — regardless of what the client displays. Verbosity controls how much detail is included: `minimal` (core fields only), `standard` (balanced), or `full` (everything).
+The LLM always receives the complete structured data via `responseFormatter` — full file lists, metadata, timestamps —
+regardless of what the client displays. Verbosity controls how much detail is included: `minimal` (core fields only),
+`standard` (balanced), or `full` (everything).
 
 ## Development guide
 
@@ -229,7 +242,8 @@ bun run devcheck      # Lint, format, typecheck, audit
 The server uses a provider-based architecture for git operations:
 
 - **CLI provider** (current) — Full 28-tool coverage via native git CLI. Requires local git installation.
-- **Isomorphic git provider** (planned) — Pure JS implementation for edge deployment (Cloudflare Workers, Vercel Edge, Deno Deploy). Uses [isomorphic-git](https://isomorphic-git.org/).
+- **Isomorphic git provider** (planned) — Pure JS implementation for edge deployment (Cloudflare Workers, Vercel Edge,
+  Deno Deploy). Uses [isomorphic-git](https://isomorphic-git.org/).
 - **GitHub API provider** (maybe) — Cloud-native operations via GitHub REST/GraphQL APIs, no local repo required.
 
 ## Contributing

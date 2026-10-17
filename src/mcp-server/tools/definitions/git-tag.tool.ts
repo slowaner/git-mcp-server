@@ -52,7 +52,7 @@ const InputSchema = z
       .boolean()
       .default(false)
       .describe(
-        'Create an annotated tag with a default "Tag <name>" message. Only effective when no message is provided and signing is disabled — otherwise the tag is always annotated.',
+        'Create an annotated tag with a default "Tag <name>" message when no message is provided. Signing follows the server policy and native Git configuration.',
       ),
     force: ForceSchema.describe(
       'Overwrite an existing tag (create mode only; has no effect on list or delete).',
@@ -101,13 +101,13 @@ const OutputSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Whether the created tag was signed. Only populated for create mode. False when GIT_SIGN_COMMITS=false or when signing failed and fell back to unsigned.',
+      'Whether the created tag contains a signature, including signing through native Git configuration. Signature validity is not verified. Only populated for create mode.',
     ),
   signingWarning: z
     .string()
     .optional()
     .describe(
-      'Populated only when signing was requested but failed, and the tag was created unsigned as a fallback.',
+      'Populated when an explicit signing attempt failed and creation was retried using native Git configuration. The retry may still produce a signature.',
     ),
   verifiedTag: z
     .string()

@@ -54,11 +54,9 @@ export async function executeCommit(
       args.push('--no-verify');
     }
 
-    // Signing policy: attempt when GIT_SIGN_COMMITS is enabled, fall back
-    // to unsigned silently on failure. `signed` in the result reflects the
-    // actual outcome so callers can observe fallback.
+    // Explicitly request signing when enabled; otherwise let native Git
+    // configuration decide. A retry removes only our explicit request.
     const signRequested = shouldSignCommits();
-    let signed = false;
     let signingWarning: string | undefined;
 
     if (signRequested) {
@@ -74,7 +72,6 @@ export async function executeCommit(
 
     try {
       await execGit(cmd, context.workingDirectory, context.requestContext);
-      signed = signRequested;
     } catch (error) {
       if (!signRequested) {
         throw error;
@@ -82,17 +79,17 @@ export async function executeCommit(
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       logger.warning(
-        'Commit signing failed; retrying unsigned. Set GIT_SIGN_COMMITS=false to suppress this attempt.',
+        'Explicit commit signing failed; retrying with native Git configuration. Set GIT_SIGN_COMMITS=false to defer to Git from the first attempt.',
         { ...context.requestContext, error },
       );
-      signingWarning = `GIT_SIGN_COMMITS is enabled but signing failed; commit created unsigned. Check signing key availability (gpg-agent running, SSH key accessible). Underlying error: ${errorMessage}`;
-      const unsignedArgs = args.filter((a) => a !== '--gpg-sign');
-      const unsignedCmd = buildGitCommand({
+      signingWarning = `Explicit commit signing failed; retried with native Git configuration. Check signing key availability (gpg-agent running, SSH key accessible). Underlying error: ${errorMessage}`;
+      const nativeArgs = args.filter((a) => a !== '--gpg-sign');
+      const nativeCmd = buildGitCommand({
         command: 'commit',
-        args: unsignedArgs,
+        args: nativeArgs,
       });
       await execGit(
-        unsignedCmd,
+        nativeCmd,
         context.workingDirectory,
         context.requestContext,
       );
@@ -133,6 +130,16 @@ export async function executeCommit(
     // Parse changed files from the second part of the output
     // git show --name-only outputs filenames after the metadata section
     const filesChanged = parts[1]?.split('\n').filter((f) => f.trim()) || [];
+
+    // Read signature presence, not validity: verification can require trust
+    // configuration or a key that is unavailable on this machine.
+    const objectResult = await execGit(
+      buildGitCommand({ command: 'cat-file', args: ['commit', commitHash] }),
+      context.workingDirectory,
+      context.requestContext,
+    );
+    const headers = objectResult.stdout.split('\n\n', 1)[0] || '';
+    const signed = /^gpgsig(?:-sha256)? /m.test(headers);
 
     const result: GitCommitResult = {
       success: true,

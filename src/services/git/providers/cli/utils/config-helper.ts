@@ -24,11 +24,11 @@ export function loadConfig(): AppConfig | null {
 }
 
 /**
- * Whether commits and tags should be signed. Governed by `GIT_SIGN_COMMITS`
- * — the single switch for all signing operations in the server (commits,
- * tags, merges, rebases, cherry-picks). When enabled, operations attempt
- * to sign and fall back to unsigned silently on failure, surfacing the
- * fallback via the `signed` and `signingWarning` fields in the response.
+ * Whether to explicitly request signing for commits, tags, merges, rebases,
+ * cherry-picks, and pulls. False leaves native Git signing configuration in
+ * control; it does not disable signing. Commit/tag creation alone retries a
+ * failed explicit request without the signing flag. Results report actual
+ * signature presence and expose the retry through `signingWarning`.
  * Returns false if config is unavailable.
  */
 export function shouldSignCommits(): boolean {
