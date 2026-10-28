@@ -4,6 +4,8 @@
  */
 import { z } from 'zod';
 
+import { resolveGitPath } from '../utils/git-path-policy.js';
+
 import { withToolAuth } from '@/mcp-server/transports/auth/lib/withAuth.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import {
@@ -141,6 +143,10 @@ async function gitSetWorkingDirLogic(
 ): Promise<ToolOutput> {
   const { provider, storage, appContext } = dependencies;
   const tenantId = appContext.tenantId || 'default-tenant';
+  input = {
+    ...input,
+    path: await resolveGitPath(input.path, { unrestrictedRelative: true }),
+  };
 
   await ensureRepositoryReady(input, dependencies, tenantId);
 

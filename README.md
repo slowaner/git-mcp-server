@@ -102,7 +102,7 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 ## Security
 
 - All file paths are validated and sanitized to prevent directory traversal.
-- Optional `GIT_BASE_DIR` restricts operations to a specific directory tree for multi-tenant sandboxing.
+- Optional `GIT_BASE_DIR` restricts Git paths to one or more explicitly allowed directory trees. This lexical check is not an OS sandbox.
 - Git commands use validated arguments via process spawning — no shell interpolation.
 - JWT and OAuth support for authenticated deployments.
 - Optional rate limiting via the DI-managed `RateLimiter` service.
@@ -138,7 +138,7 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 | `GIT_SIGN_COMMITS`             | Explicit signing for commits, tags, merges, rebases, cherry-picks, and pulls; `false` defers to native Git config. Only commit/tag retries remove the explicit signing flag (see `signed`/`signingWarning`). | `true`      |
 | `GIT_AUTHOR_NAME`              | Git author name. Aliases: `GIT_USERNAME`, `GIT_USER`. Falls back to global git config.                                                                                                                       | `(none)`    |
 | `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                                                                                   | `(none)`    |
-| `GIT_BASE_DIR`                 | Absolute path to restrict all git operations to a specific directory tree.                                                                                                                                   | `(none)`    |
+| `GIT_BASE_DIR`                 | Comma-separated absolute directory roots; the first anchors relative repository paths. Tilde expansion is supported; literal commas in roots are not.                                                        | `(none)`    |
 | `GIT_WRAPUP_INSTRUCTIONS_PATH` | Path to custom markdown file with workflow instructions.                                                                                                                                                     | `(none)`    |
 | `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ character secret key.                                                                                                                                                           | `(none)`    |
 | `OAUTH_ISSUER_URL`             | Required for `oauth` auth. OIDC provider URL.                                                                                                                                                                | `(none)`    |
@@ -268,3 +268,32 @@ Apache 2.0. See [LICENSE](./LICENSE).
     <a href="https://www.buymeacoffee.com/cyanheads">Buy me a coffee</a>
   </p>
 </div>
+
+### Multiple allowed Git roots
+
+`GIT_BASE_DIR` accepts one path (backward compatible), or comma-separated paths:
+
+```json
+{
+  "GIT_BASE_DIR": "/absolute/repos, /absolute/worktrees/project"
+}
+```
+
+Entries are trimmed, normalized, and deduplicated in order. Empty entries,
+whitespace-only values, and relative roots are configuration errors; unset keeps
+the existing unrestricted-root behavior. A literal comma in a root is not supported.
+Relative repository paths resolve only against the first root, never by searching
+all roots. Absolute paths may be inside any root. `.` still uses the stored working
+directory; it does not select the first root automatically. Stored directories
+are checked again on each tool operation, so removing a root does not preserve
+old access through a cached cwd. `git_set_working_dir` validates before repository
+inspection, initialization, or persistence. Clone destinations/local sources and
+worktree add/remove/move paths use the same allowlist. Relative extra worktree
+paths resolve against the selected repository cwd, as Git expects.
+
+This is lexical path validation, not filesystem isolation: symlink/realpath
+hardening is separate. Linked worktrees share repository metadata through their
+`.git` file; the allowlist does not confine Git's metadata, configuration, hooks,
+network access, or inherited environment. Do not use symlinks to bypass a denied
+path. Changing configuration requires an explicit server restart; it is not
+hot-reloaded and does not relocate existing worktrees.

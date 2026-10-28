@@ -3,6 +3,10 @@
  * @module mcp-server/tools/definitions/git-clone
  */
 import { z } from 'zod';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { resolveGitPath } from '../utils/git-path-policy.js';
 
 import type { ToolDefinition } from '../utils/toolDefinition.js';
 import { withToolAuth } from '@/mcp-server/transports/auth/lib/withAuth.js';
@@ -62,6 +66,17 @@ async function gitCloneLogic(
   input: ToolInput,
   { provider, appContext }: ToolLogicDependencies,
 ): Promise<ToolOutput> {
+  const destination = await resolveGitPath(input.path, {
+    unrestrictedRelative: true,
+  });
+  let source = input.url;
+  if (/^file:\/\//i.test(source)) {
+    // Validate the decoded filesystem path; keep URL encoding for Git itself.
+    await resolveGitPath(fileURLToPath(source));
+  } else if (path.isAbsolute(source)) {
+    source = await resolveGitPath(source);
+  }
+
   const cloneOptions: {
     remoteUrl: string;
     localPath: string;
@@ -70,8 +85,8 @@ async function gitCloneLogic(
     bare?: boolean;
     mirror?: boolean;
   } = {
-    remoteUrl: input.url,
-    localPath: input.path,
+    remoteUrl: source,
+    localPath: destination,
     bare: input.bare,
     mirror: input.mirror,
   };

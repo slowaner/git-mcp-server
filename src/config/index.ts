@@ -258,14 +258,23 @@ const ConfigSchema = z.object({
       expandTildePath,
       z.string().optional(),
     ), // Supports tilde expansion for custom wrapup instructions
-    baseDir: z.preprocess(
-      (val) => expandTildePath(emptyStringAsUndefined(val)),
+    baseDirs: z.preprocess(
+      (value) =>
+        typeof value === 'string'
+          ? value.split(',').map((entry) => expandTildePath(entry))
+          : value,
       z
-        .string()
-        .refine((p) => !p || isAbsolutePath(p), {
-          message:
-            'GIT_BASE_DIR must be an absolute path (tilde expansion is supported)',
-        })
+        .array(
+          z
+            .string()
+            .refine((root) => isAbsolutePath(root) && !root.includes('\0'), {
+              message: 'Every GIT_BASE_DIR entry must be an absolute path',
+            }),
+        )
+        .min(1)
+        .transform((roots) => [
+          ...new Set(roots.map((root) => path.resolve(root))),
+        ])
         .optional(),
     ),
     maxCommandTimeoutMs: z.coerce.number().default(30000),
@@ -381,7 +390,7 @@ const parseConfig = () => {
         env.GIT_USER_EMAIL ||
         undefined,
       wrapupInstructionsPath: env.GIT_WRAPUP_INSTRUCTIONS_PATH,
-      baseDir: env.GIT_BASE_DIR,
+      baseDirs: env.GIT_BASE_DIR,
       maxCommandTimeoutMs: env.GIT_MAX_COMMAND_TIMEOUT_MS,
       maxBufferSizeMb: env.GIT_MAX_BUFFER_SIZE_MB,
     },

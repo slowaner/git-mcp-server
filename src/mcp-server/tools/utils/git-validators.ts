@@ -6,11 +6,10 @@
  * For git command execution validators, see src/services/git/providers/cli/utils/git-validators.ts
  */
 
-import path from 'node:path';
-
 import type { StorageService } from '@/storage/core/StorageService.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
-import { logger, type RequestContext, sanitization } from '@/utils/index.js';
+import { resolveGitPath } from './git-path-policy.js';
+import { logger, type RequestContext } from '@/utils/index.js';
 
 /**
  * Resolve working directory from session storage or direct path input.
@@ -94,47 +93,7 @@ export async function resolveWorkingDirectory(
     });
   }
 
-  // Sanitize path for security (prevent directory traversal)
-  // If GIT_BASE_DIR is configured, restrict operations to that directory tree
-  const { config } = await import('@/config/index.js');
-  const sanitizeOptions: {
-    allowAbsolute: boolean;
-    rootDir?: string;
-  } = {
-    allowAbsolute: true,
-  };
-
-  // Only set rootDir if config exists and GIT_BASE_DIR is configured
-  // (config may be undefined in test environments)
-  if (config?.git?.baseDir) {
-    sanitizeOptions.rootDir = config.git.baseDir;
-  }
-
-  const { sanitizedPath } = sanitization.sanitizePath(
-    workingDir,
-    sanitizeOptions,
-  );
-
-  /**
-   * sanitizePath returns paths relative to rootDir when rootDir is set.
-   * Git is spawned with this as its cwd, so a relative path would resolve
-   * against the MCP process cwd — making behavior client-dependent (see
-   * issue #43). Re-anchor to baseDir so spawn always gets an absolute path.
-   */
-  const resolvedPath =
-    sanitizeOptions.rootDir && !path.isAbsolute(sanitizedPath)
-      ? path.resolve(sanitizeOptions.rootDir, sanitizedPath)
-      : sanitizedPath;
-
-  logger.debug('Sanitized working directory path', {
-    ...appContext,
-    original: workingDir,
-    sanitized: sanitizedPath,
-    resolved: resolvedPath,
-    baseDir: config?.git?.baseDir,
-  });
-
-  return resolvedPath;
+  return resolveGitPath(workingDir);
 }
 
 /**
