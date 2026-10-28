@@ -126,6 +126,9 @@ const SAFE_GIT_OPTIONS = new Set([
   '--is-inside-work-tree',
   '--show-toplevel',
   '--verify',
+  // Read effective native signing configuration.
+  '--get',
+  '--type',
   // Message-taking commands (commit, merge, stash push, tag) emit the message
   // attached (`--message=<text>`) so a message that starts with `-` is never a
   // standalone argv entry the validator would have to reject.

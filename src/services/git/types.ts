@@ -257,15 +257,14 @@ export interface GitCommitResult {
   /** Files changed in this commit */
   filesChanged: string[];
   /**
-   * Whether the commit was signed. True when signing was attempted and
-   * succeeded. False when `GIT_SIGN_COMMITS=false`, or when signing was
-   * attempted and silently fell back to unsigned on failure.
+   * Whether the created commit contains a signature, including signatures
+   * produced by native Git configuration. Does not verify signature validity.
    */
   signed: boolean;
   /**
    * Populated only when signing was requested (`GIT_SIGN_COMMITS=true`)
-   * but failed, and the commit was created unsigned as a fallback. Absent
-   * when signing succeeded or when signing was not requested at all.
+   * but failed, and creation was retried using native Git configuration.
+   * The retry may still produce a signed commit. Absent without a retry.
    */
   signingWarning?: string;
 }
@@ -752,16 +751,15 @@ export interface GitTagResult {
   /** Deleted tag name (for delete mode) */
   deleted?: string;
   /**
-   * Whether the created tag was signed. Only populated for create mode.
-   * True when signing was attempted and succeeded. False when
-   * `GIT_SIGN_COMMITS=false`, or when signing failed and fell back to
-   * unsigned silently.
+   * Whether the created tag contains a signature, including signatures
+   * produced by native Git configuration. Only populated for create mode.
+   * Does not verify validity or count a lightweight tag's target signature.
    */
   signed?: boolean;
   /**
    * Populated only when signing was requested (`GIT_SIGN_COMMITS=true`)
-   * but failed, and the tag was created unsigned as a fallback. Absent
-   * when signing succeeded or when signing was not requested at all.
+   * but failed, and creation was retried using native Git configuration.
+   * The retry may still produce a signed tag. Absent without a retry.
    */
   signingWarning?: string;
   /**
