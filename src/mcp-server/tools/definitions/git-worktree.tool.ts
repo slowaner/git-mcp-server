@@ -4,6 +4,8 @@
  */
 import { z } from 'zod';
 
+import { resolveGitPath } from '../utils/git-path-policy.js';
+
 import type { ToolDefinition } from '../utils/toolDefinition.js';
 import { withToolAuth } from '@/mcp-server/transports/auth/lib/withAuth.js';
 import {
@@ -128,7 +130,9 @@ async function gitWorktreeLogic(
   };
 
   if (input.worktreePath !== undefined) {
-    worktreeOptions.path = input.worktreePath;
+    worktreeOptions.path = await resolveGitPath(input.worktreePath, {
+      relativeTo: targetPath,
+    });
   }
   if (input.branch !== undefined) {
     worktreeOptions.branch = input.branch;
@@ -140,7 +144,9 @@ async function gitWorktreeLogic(
     worktreeOptions.force = input.force;
   }
   if (input.newPath !== undefined) {
-    worktreeOptions.newPath = input.newPath;
+    worktreeOptions.newPath = await resolveGitPath(input.newPath, {
+      relativeTo: targetPath,
+    });
   }
   if (input.detach !== undefined) {
     worktreeOptions.detach = input.detach;

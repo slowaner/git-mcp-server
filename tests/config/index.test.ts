@@ -87,3 +87,51 @@ describe('config parsing', () => {
     consoleSpy.mockRestore();
   });
 });
+
+describe('GIT_BASE_DIR comma-separated roots', () => {
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('keeps unset unrestricted and parses a legacy single root', () => {
+    delete process.env.GIT_BASE_DIR;
+    expect(parseConfig().git.baseDirs).toBeUndefined();
+    process.env.GIT_BASE_DIR = '/test/repos';
+    expect(parseConfig().git.baseDirs).toEqual(['/test/repos']);
+  });
+
+  it('trims, normalizes and deduplicates roots without changing order', () => {
+    process.env.GIT_BASE_DIR = ' /test/repos/ , /test/worktrees , /test/repos ';
+    expect(parseConfig().git.baseDirs).toEqual([
+      '/test/repos',
+      '/test/worktrees',
+    ]);
+  });
+
+  it('expands tilde for each root', async () => {
+    const { homedir } = await import('node:os');
+    process.env.GIT_BASE_DIR = '~/repos, ~/worktrees';
+    expect(parseConfig().git.baseDirs).toEqual([
+      `${homedir()}/repos`,
+      `${homedir()}/worktrees`,
+    ]);
+  });
+
+  for (const value of [
+    '',
+    '   ',
+    ',',
+    '/test/repos,',
+    ',/test/repos',
+    '/test/repos, ,/test/worktrees',
+    '/test/repos\0bad',
+    'relative',
+    '/test/repos,relative',
+    '["/test/repos"]',
+  ]) {
+    it(`rejects malformed/empty roots: ${JSON.stringify(value)}`, () => {
+      process.env.GIT_BASE_DIR = value;
+      expect(() => parseConfig()).toThrow(McpError);
+    });
+  }
+});
