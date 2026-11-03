@@ -8,6 +8,12 @@
  * @module mcp-server/tools/utils/repo-snapshot
  */
 import { z } from 'zod';
+import { resolveGitPath } from './git-path-policy.js';
+import {
+  repositoryRootsFromContext,
+  withRepositoryRoots,
+} from '@/services/git/core/configured-repository-policy.js';
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 
 import type { IGitProvider } from '@/services/git/core/IGitProvider.js';
 import type { GitOperationContext } from '@/services/git/types.js';
@@ -111,6 +117,7 @@ interface GatherDependencies {
   provider: IGitProvider;
   appContext: RequestContext;
   workingDirectory: string;
+  readonly repositoryRoots?: readonly string[];
 }
 
 const NOT_A_REPO_HINT =
@@ -158,7 +165,15 @@ export async function gatherRepoSnapshot(
   deps: GatherDependencies,
   options: GatherRepoSnapshotOptions = {},
 ): Promise<GatherRepoSnapshotResult> {
-  const { provider, appContext, workingDirectory } = deps;
+  const { provider, appContext } = deps;
+  // Authorization must precede every provider, including best-effort enrichment.
+  const workingDirectory = await withRepositoryRoots(
+    repositoryRootsFromContext(appContext),
+    () =>
+      resolveGitPath(deps.workingDirectory, {
+        repositoryRoots: deps.repositoryRoots,
+      }),
+  );
   const commitLimit = options.commitLimit ?? 2;
   const tagLimit = options.tagLimit ?? 2;
   const tenantId = appContext.tenantId || 'default-tenant';
@@ -167,6 +182,8 @@ export async function gatherRepoSnapshot(
     workingDirectory,
     requestContext: appContext,
     tenantId,
+    repositoryRoots:
+      deps.repositoryRoots ?? repositoryRootsFromContext(appContext),
   };
 
   const fetchStatus = provider.status({ includeUntracked: true }, context);
@@ -184,6 +201,14 @@ export async function gatherRepoSnapshot(
   ]);
 
   const settled = [statusRes, logRes, tagsRes, remotesRes];
+  for (const result of settled) {
+    if (
+      result.status === 'rejected' &&
+      result.reason instanceof McpError &&
+      result.reason.code === JsonRpcErrorCode.Forbidden
+    )
+      throw result.reason;
+  }
   const rejections = settled.filter(
     (s): s is PromiseRejectedResult => s.status === 'rejected',
   );

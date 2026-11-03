@@ -3,6 +3,8 @@
  * @module tests/mcp-server/tools/utils/git-validators.test
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { installTrustedGitFixture } from '../definitions/helpers/testContext.js';
+installTrustedGitFixture();
 
 import {
   resolveWorkingDirectory,

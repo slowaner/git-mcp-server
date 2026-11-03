@@ -202,7 +202,9 @@ describe('git_worktree tool', () => {
       expect(mockProvider.worktree).toHaveBeenCalledTimes(1);
       const [worktreeOptions] = mockProvider.worktree.mock.calls[0]!;
       expect(worktreeOptions.mode).toBe('add');
-      expect(worktreeOptions.path).toBe('/tmp/new-worktree');
+      expect(worktreeOptions.path).toBe(
+        (await import('node:fs')).realpathSync('/tmp') + '/new-worktree',
+      );
       expect(worktreeOptions.branch).toBe('feature');
 
       expect(result.success).toBe(true);

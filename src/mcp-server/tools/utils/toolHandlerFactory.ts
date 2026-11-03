@@ -7,6 +7,10 @@
  */
 import { container } from 'tsyringe';
 import {
+  repositoryRootsFromContext,
+  withRepositoryRoots,
+} from '@/services/git/core/configured-repository-policy.js';
+import {
   assertConfiguredGitExecutionPolicy,
   withConfiguredGitExecutionContext,
 } from '@/services/git/providers/cli/utils/configured-execution-policy.js';
@@ -488,6 +492,8 @@ export function createToolHandler<TInput, TOutput>(
     };
 
     // Execute the pure business logic with all dependencies provided
-    return coreLogic(input, deps);
+    return withRepositoryRoots(repositoryRootsFromContext(appContext), () =>
+      coreLogic(input, deps),
+    );
   };
 }

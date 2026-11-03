@@ -95,6 +95,9 @@ const SAFE_GIT_OPTIONS = new Set([
   // Pre-flight validators (`git rev-parse`)
   '--is-inside-work-tree',
   '--show-toplevel',
+  '--absolute-git-dir',
+  '--git-common-dir',
+  '--path-format',
   '--verify',
   // Read effective native signing configuration.
   '--get',

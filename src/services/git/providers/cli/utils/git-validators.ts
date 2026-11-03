@@ -14,8 +14,8 @@ import { executeGitCommand } from './git-executor.js';
 /**
  * Validate that a directory is a git repository.
  *
- * Uses `git rev-parse --is-inside-work-tree` to check if the path
- * is within a git working directory.
+ * Uses guarded `git rev-parse --absolute-git-dir` for ordinary, bare and linked
+ * repositories after canonical metadata and effective-config authorization.
  *
  * @param path - Path to check
  * @param context - Request context for logging
@@ -34,11 +34,11 @@ export async function validateGitRepository(
 ): Promise<boolean> {
   try {
     const result = await executeGitCommand(
-      ['rev-parse', '--is-inside-work-tree'],
+      ['rev-parse', '--absolute-git-dir'],
       path,
     );
 
-    if (result.stdout.trim() !== 'true') {
+    if (result.stdout.replace(/\n$/, '') === '') {
       throw new McpError(
         JsonRpcErrorCode.ValidationError,
         `Not a git repository: ${path}`,

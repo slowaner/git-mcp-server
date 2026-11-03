@@ -3,6 +3,11 @@
  * @module tests/services/git/providers/cli/operations/worktree/worktree.test
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { realpathSync } from 'node:fs';
+import { join } from 'node:path';
+import { installTrustedGitFixture } from '../../../../../../mcp-server/tools/definitions/helpers/testContext.js';
+installTrustedGitFixture();
+const canonicalWorktree = join(realpathSync('/tmp'), 'worktree');
 
 import { executeWorktree } from '@/services/git/providers/cli/operations/worktree/worktree.js';
 import type { GitOperationContext } from '@/services/git/types.js';
@@ -170,9 +175,9 @@ locked
       const [args] = mockExecGit.mock.calls[0]!;
       expect(args).toContain('worktree');
       expect(args).toContain('add');
-      expect(args).toContain('/tmp/worktree');
+      expect(args).toContain(canonicalWorktree);
       expect(result.mode).toBe('add');
-      expect(result.added).toBe('/tmp/worktree');
+      expect(result.added).toBe(canonicalWorktree);
     });
 
     it('adds a worktree with commitish', async () => {
@@ -228,7 +233,7 @@ locked
       // git worktree add -b <branch> <path> [commitish]
       const [args] = mockExecGit.mock.calls[0]!;
       const branchFlagIdx = args.indexOf('-b');
-      const pathIdx = args.indexOf('/tmp/worktree');
+      const pathIdx = args.indexOf(canonicalWorktree);
       const commitishIdx = args.indexOf('abc123');
       expect(branchFlagIdx).toBeLessThan(pathIdx);
       expect(pathIdx).toBeLessThan(commitishIdx);
@@ -249,7 +254,7 @@ locked
       const [args] = mockExecGit.mock.calls[0]!;
       const detachIdx = args.indexOf('--detach');
       const forceIdx = args.indexOf('--force');
-      const pathIdx = args.indexOf('/tmp/worktree');
+      const pathIdx = args.indexOf(canonicalWorktree);
       expect(detachIdx).toBeLessThan(pathIdx);
       expect(forceIdx).toBeLessThan(pathIdx);
     });
@@ -309,9 +314,9 @@ locked
       const [args] = mockExecGit.mock.calls[0]!;
       expect(args).toContain('worktree');
       expect(args).toContain('remove');
-      expect(args).toContain('/tmp/worktree');
+      expect(args).toContain(canonicalWorktree);
       expect(result.mode).toBe('remove');
-      expect(result.removed).toBe('/tmp/worktree');
+      expect(result.removed).toBe(canonicalWorktree);
     });
 
     it('removes a worktree with --force', async () => {
@@ -344,7 +349,7 @@ locked
 
       const [args] = mockExecGit.mock.calls[0]!;
       const forceIdx = args.indexOf('--force');
-      const pathIdx = args.indexOf('/tmp/worktree');
+      const pathIdx = args.indexOf(canonicalWorktree);
       expect(forceIdx).toBeGreaterThan(-1);
       expect(forceIdx).toBeLessThan(pathIdx);
     });
@@ -372,10 +377,13 @@ locked
       const [args] = mockExecGit.mock.calls[0]!;
       expect(args).toContain('worktree');
       expect(args).toContain('move');
-      expect(args).toContain('/tmp/old');
-      expect(args).toContain('/tmp/new');
+      expect(args).toContain(join(realpathSync('/tmp'), 'old'));
+      expect(args).toContain(join(realpathSync('/tmp'), 'new'));
       expect(result.mode).toBe('move');
-      expect(result.moved).toEqual({ from: '/tmp/old', to: '/tmp/new' });
+      expect(result.moved).toEqual({
+        from: join(realpathSync('/tmp'), 'old'),
+        to: join(realpathSync('/tmp'), 'new'),
+      });
     });
 
     it('throws error when path or newPath is missing for move', async () => {
@@ -440,7 +448,7 @@ locked
       );
 
       expect(result).toHaveProperty('mode', 'add');
-      expect(result).toHaveProperty('added', '/tmp/wt');
+      expect(result).toHaveProperty('added', join(realpathSync('/tmp'), 'wt'));
     });
   });
 });

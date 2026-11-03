@@ -66,7 +66,7 @@ describe('validateGitArgs allow-list covers every flag the operations emit', () 
     const files = new Set([...flags.values()].flat());
     expect(files).toContain('utils/git-validators.ts');
     expect(files).toContain('CliGitProvider.ts');
-    expect(flags.has('--is-inside-work-tree')).toBe(true);
+    expect(flags.has('--absolute-git-dir')).toBe(true);
   });
 
   it('accepts every rev-parse probe the validators emit', () => {

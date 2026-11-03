@@ -105,15 +105,19 @@ describe('source-built STDIO runtime policy', { timeout: 20000 }, () => {
     assert.equal(status.isError, true);
     await assert.rejects(readFile(path.join(directory, 'executed')));
   });
-  it('explicit trusted opt-in permits ordinary status with controlled Git', async () => {
-    const client = await connect({ GIT_EXECUTION_PROFILE: 'trusted' });
-    const result = await client.callTool({
-      name: 'git_status',
-      arguments: { path: directory },
-    });
-    assert.notEqual(result.isError, true, JSON.stringify(result.content));
-    assert.ok(result.structuredContent);
-  });
+  it(
+    'explicit trusted opt-in permits ordinary status with controlled Git',
+    { timeout: 20000 },
+    async () => {
+      const client = await connect({ GIT_EXECUTION_PROFILE: 'trusted' });
+      const result = await client.callTool({
+        name: 'git_status',
+        arguments: { path: directory },
+      });
+      assert.notEqual(result.isError, true, JSON.stringify(result.content));
+      assert.ok(result.structuredContent);
+    },
+  );
   it('canonical Node entrypoint ignores repository .env authority before filesystem operations', async () => {
     await writeFile(
       path.join(directory, '.env'),
@@ -135,21 +139,25 @@ describe('source-built STDIO runtime policy', { timeout: 20000 }, () => {
     );
     await assert.rejects(stat(destination), { code: 'ENOENT' });
   });
-  it('built server rejects invalid blob output without formatting a success', async () => {
-    const file = path.join(directory, 'invalid-blob');
-    await writeFile(file, Buffer.from([0xff]));
-    const hash = execFileSync('/usr/bin/git', ['hash-object', '-w', file], {
-      cwd: directory,
-      env: { HOME: home, PATH: '/usr/bin:/bin' },
-      encoding: 'utf8',
-    }).trim();
-    const client = await connect({ GIT_EXECUTION_PROFILE: 'trusted' });
-    const result = await client.callTool({
-      name: 'git_show',
-      arguments: { path: directory, object: hash },
-    });
-    assert.equal(result.isError, true);
-    assert.equal(result.structuredContent, undefined);
-    assert.match(JSON.stringify(result.content), /UTF-8/);
-  });
+  it(
+    'built server rejects invalid blob output without formatting a success',
+    { timeout: 20000 },
+    async () => {
+      const file = path.join(directory, 'invalid-blob');
+      await writeFile(file, Buffer.from([0xff]));
+      const hash = execFileSync('/usr/bin/git', ['hash-object', '-w', file], {
+        cwd: directory,
+        env: { HOME: home, PATH: '/usr/bin:/bin' },
+        encoding: 'utf8',
+      }).trim();
+      const client = await connect({ GIT_EXECUTION_PROFILE: 'trusted' });
+      const result = await client.callTool({
+        name: 'git_show',
+        arguments: { path: directory, object: hash },
+      });
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent, undefined);
+      assert.match(JSON.stringify(result.content), /UTF-8/);
+    },
+  );
 });

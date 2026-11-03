@@ -8,6 +8,7 @@ import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 /** Machine-readable failure reasons; output and command arguments are excluded. */
 export type GitExecutionFailure =
   | 'POLICY_UNSUPPORTED'
+  | 'REPOSITORY_BOUNDARY'
   | 'INVALID_EXECUTION_OPTIONS'
   | 'OUTPUT_LIMIT'
   | 'INVALID_OUTPUT_ENCODING'
@@ -25,15 +26,18 @@ export class GitExecutionError extends McpError {
     message: string,
   ) {
     super(
-      reason === 'DEADLINE' || reason === 'CANCELLED'
-        ? JsonRpcErrorCode.Timeout
-        : reason === 'POLICY_UNSUPPORTED' || reason === 'SPAWN_FAILED'
-          ? JsonRpcErrorCode.ServiceUnavailable
-          : reason === 'INVALID_EXECUTION_OPTIONS'
-            ? JsonRpcErrorCode.ConfigurationError
-            : reason === 'OUTPUT_LIMIT' || reason === 'INVALID_OUTPUT_ENCODING'
-              ? JsonRpcErrorCode.InvalidRequest
-              : JsonRpcErrorCode.InternalError,
+      reason === 'REPOSITORY_BOUNDARY'
+        ? JsonRpcErrorCode.Forbidden
+        : reason === 'DEADLINE' || reason === 'CANCELLED'
+          ? JsonRpcErrorCode.Timeout
+          : reason === 'POLICY_UNSUPPORTED' || reason === 'SPAWN_FAILED'
+            ? JsonRpcErrorCode.ServiceUnavailable
+            : reason === 'INVALID_EXECUTION_OPTIONS'
+              ? JsonRpcErrorCode.ConfigurationError
+              : reason === 'OUTPUT_LIMIT' ||
+                  reason === 'INVALID_OUTPUT_ENCODING'
+                ? JsonRpcErrorCode.InvalidRequest
+                : JsonRpcErrorCode.InternalError,
       message,
       { reason },
     );

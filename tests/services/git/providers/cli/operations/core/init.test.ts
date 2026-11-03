@@ -3,6 +3,9 @@
  * @module tests/services/git/providers/cli/operations/core/init.test
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { existsSync } from 'node:fs';
+import { installTrustedGitFixture } from '../../../../../../mcp-server/tools/definitions/helpers/testContext.js';
+installTrustedGitFixture();
 
 import { executeInit } from '@/services/git/providers/cli/operations/core/init.js';
 import type { GitOperationContext } from '@/services/git/types.js';
@@ -53,8 +56,9 @@ describe('executeInit', () => {
       const [args, cwd] = mockExecGit.mock.calls[0]!;
       expect(args).toContain('init');
       expect(args).toContain('--initial-branch=main');
-      // cwd is the target path (not context.workingDirectory) since init creates the repo there
-      expect(cwd).toBe('/new/repo');
+      // Git creates the target only after the gate, from an existing ancestor.
+      expect(existsSync(cwd)).toBe(true);
+      expect(args.slice(-2)).toEqual(['--', '/new/repo']);
     });
   });
 
