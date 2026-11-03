@@ -3,6 +3,12 @@
  * @module src/storage/providers/cloudflare/r2Provider
  */
 import type { R2Bucket } from '@cloudflare/workers-types';
+import {
+  encodeStorageKey,
+  encodeStoragePrefix,
+  decodeStorageKey,
+  storageTenantPrefix,
+} from '@/storage/core/storageKeyCodec.js';
 
 import type {
   IStorageProvider,
@@ -35,7 +41,7 @@ export class R2Provider implements IStorageProvider {
   }
 
   private getR2Key(tenantId: string, key: string): string {
-    return `${tenantId}:${key}`;
+    return encodeStorageKey(tenantId, key);
   }
 
   private buildEnvelope(value: unknown, options?: StorageOptions): R2Envelope {
@@ -177,7 +183,7 @@ export class R2Provider implements IStorageProvider {
     context: RequestContext,
     options?: ListOptions,
   ): Promise<ListResult> {
-    const r2Prefix = this.getR2Key(tenantId, prefix);
+    const r2Prefix = encodeStoragePrefix(tenantId, prefix);
     return ErrorHandler.tryCatch(
       async () => {
         logger.debug(`[R2Provider] Listing keys with prefix: ${r2Prefix}`, {
@@ -195,11 +201,8 @@ export class R2Provider implements IStorageProvider {
         }
         const listed = await this.bucket.list(listOptions);
 
-        const tenantPrefix = `${tenantId}:`;
         const keys = listed.objects.map((obj) =>
-          obj.key.startsWith(tenantPrefix)
-            ? obj.key.substring(tenantPrefix.length)
-            : obj.key,
+          decodeStorageKey(tenantId, obj.key),
         );
 
         const hasMore = keys.length > limit;
@@ -292,7 +295,7 @@ export class R2Provider implements IStorageProvider {
   async clear(tenantId: string, context: RequestContext): Promise<number> {
     return ErrorHandler.tryCatch(
       async () => {
-        const r2Prefix = `${tenantId}:`;
+        const r2Prefix = storageTenantPrefix(tenantId);
         let deletedCount = 0;
         let cursor: string | undefined;
         let hasMore = true;
@@ -307,6 +310,8 @@ export class R2Provider implements IStorageProvider {
           }
           const listed = await this.bucket.list(listOpts);
 
+          // Validate the entire backend page before the first destructive call.
+          for (const obj of listed.objects) decodeStorageKey(tenantId, obj.key);
           const deletePromises = listed.objects.map((obj) =>
             this.bucket.delete(obj.key),
           );

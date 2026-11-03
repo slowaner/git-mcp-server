@@ -108,6 +108,9 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 - Optional `GIT_BASE_DIR` restricts Git paths to one or more explicitly allowed directory trees. This lexical check is not an OS sandbox.
 - Git commands use validated arguments via process spawning — no shell interpolation.
 - JWT and OAuth support for authenticated deployments.
+
+Authenticated HTTP requires an explicit issuer/audience, bounded tokens and exact principal repository grants. Development verification bypass is unsupported. See [authentication, session ownership and storage compatibility](docs/security/auth-sessions.md).
+
 - Optional rate limiting via the DI-managed `RateLimiter` service.
 - All operations are logged with request context for auditing.
 
@@ -143,7 +146,7 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 | `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                                                                                   | `(none)`    |
 | `GIT_BASE_DIR`                 | Comma-separated absolute directory roots; the first anchors relative repository paths. Tilde expansion is supported; literal commas in roots are not.                                                        | `(none)`    |
 | `GIT_WRAPUP_INSTRUCTIONS_PATH` | Path to custom markdown file with workflow instructions.                                                                                                                                                     | `(none)`    |
-| `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ character secret key.                                                                                                                                                           | `(none)`    |
+| `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ UTF-8 byte random secret, required issuer/audience; no development bypass.                                                                                                      | `(none)`    |
 | `OAUTH_ISSUER_URL`             | Required for `oauth` auth. OIDC provider URL.                                                                                                                                                                | `(none)`    |
 
 ## Running the server
@@ -173,11 +176,7 @@ npm test
 
 ### Cloudflare Workers
 
-```sh
-npm run build:worker   # Build the worker bundle
-npm run deploy:dev     # Run locally with Wrangler
-npm run deploy:prod    # Deploy to Cloudflare
-```
+The experimental Worker profile is unsupported: its entrypoint returns 503 for every route and method before bindings or application services are accessed. `bun run build:worker` builds this fail-closed response. See [Worker profile](docs/security/worker-profile.md); use the Node/local profile for application execution.
 
 ## Project structure
 

@@ -556,7 +556,7 @@ describe('production STDIO repository confinement', () => {
     });
   }, 30000);
 
-  it('revalidates persisted cwd for status and wrapup after roots narrow on restart', async () => {
+  it('discards previous-session cwd after restart and root narrowing without outside access', async () => {
     const cached = join(second, 'cached');
     git(second, 'clone', '-q', '--no-hardlinks', repo, cached);
     const stored = {
@@ -575,12 +575,19 @@ describe('production STDIO repository confinement', () => {
     });
     const before = treeHash(cached);
     await withClient({ ...stored, GIT_BASE_DIR: first }, async (client) => {
-      denied(await request(client, 'git_status', { path: '.' }));
+      const status = await request(client, 'git_status', { path: '.' });
+      expect(status.isError).toBe(true);
+      expect(JSON.stringify(status.content)).toContain(
+        'No session working directory set',
+      );
       const wrapup = await request(client, 'git_wrapup_instructions', {
         acknowledgement: 'yes',
       });
-      denied(wrapup);
+      accepted(wrapup);
       expect(wrapup.structuredContent?.repository).toBeUndefined();
+      expect(wrapup.structuredContent?.enrichmentWarnings).toEqual([
+        expect.stringContaining('No session working directory set'),
+      ]);
     });
     expect(treeHash(cached)).toBe(before);
   }, 30000);

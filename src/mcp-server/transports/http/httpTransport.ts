@@ -19,6 +19,17 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import http from 'http';
 import { randomUUID } from 'node:crypto';
+import { container } from 'tsyringe';
+import { StorageService as StorageServiceToken } from '@/container/tokens.js';
+import type { StorageService } from '@/storage/core/StorageService.js';
+import { SessionWorkingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
+import {
+  currentPrincipal,
+  hostPrincipal,
+} from '../auth/lib/requestIdentity.js';
+import { parseRepositoryGrants } from '../auth/lib/authConfiguration.js';
+import type { VerifiedPrincipal } from '../auth/lib/verifiedPrincipal.js';
+import { getConfiguredRepositoryPolicy } from '@/services/git/core/configured-repository-policy.js';
 import { HttpAdmission } from './httpAdmission.js';
 import {
   checkContentLength,
@@ -84,6 +95,13 @@ export function createHttpApp(
   createMcpServer: McpServerFactory,
   parentContext: RequestContext,
 ): Hono<{ Bindings: HonoNodeBindings }> {
+  const authStrategy = createAuthStrategy();
+  const grants = authStrategy
+    ? parseRepositoryGrants(config.mcpRepositoryGrants)
+    : undefined;
+  grants?.validateRoots((roots) => {
+    getConfiguredRepositoryPolicy().restrict(roots);
+  });
   const app = new Hono<{ Bindings: HonoNodeBindings }>();
   const transportContext = {
     ...parentContext,
@@ -95,6 +113,7 @@ export function createHttpApp(
   const transports = new Map<string, StreamableHTTPTransport>();
   const servers = new Map<string, McpServer>();
   const sessionReleases = new Map<string, () => void>();
+  const sessionOwners = new Map<string, VerifiedPrincipal>();
   const admission = new HttpAdmission(config.httpSecurity);
   const policy = config.httpSecurity;
   const hosts = policy.allowedHosts.length
@@ -110,6 +129,8 @@ export function createHttpApp(
     const pending = (async () => {
       const transport = transports.get(sid);
       const server = servers.get(sid);
+      const owner = sessionOwners.get(sid);
+      sessionOwners.delete(sid);
       transports.delete(sid);
       servers.delete(sid);
       sessionManager.terminateSession(sid);
@@ -117,6 +138,20 @@ export function createHttpApp(
       try {
         await server?.close();
         await transport?.close();
+        if (owner && container.isRegistered(StorageServiceToken)) {
+          const storage =
+            container.resolve<StorageService>(StorageServiceToken);
+          await authContext.run(
+            { principal: owner, sessionId: sid, transport: 'http' },
+            () =>
+              new SessionWorkingDirectoryStore(
+                storage,
+                owner,
+                sid,
+                transportContext,
+              ).clear(),
+          );
+        }
         sessionReleases.get(sid)?.();
         sessionReleases.delete(sid);
       } catch {
@@ -226,20 +261,46 @@ export function createHttpApp(
   });
 
   // Create auth strategy and middleware if auth is enabled
-  const authStrategy = createAuthStrategy();
   if (authStrategy) {
-    const authMiddleware = createAuthMiddleware(authStrategy);
+    const authMiddleware = createAuthMiddleware(authStrategy, grants!);
     app.use(config.mcpHttpEndpointPath, authMiddleware);
     logger.info(
       'Authentication middleware enabled for MCP endpoint.',
       transportContext,
     );
   } else {
+    app.use(config.mcpHttpEndpointPath, (_c, next) =>
+      authContext.run({ principal: hostPrincipal, transport: 'http' }, next),
+    );
     logger.info(
       'Authentication is disabled; MCP endpoint is unprotected.',
       transportContext,
     );
   }
+
+  // Compare ownership before expiry lookup, touch, request/stream leases or dispatch.
+  app.use(config.mcpHttpEndpointPath, async (c, next) => {
+    const sid = c.req.header('mcp-session-id');
+    if (sid) {
+      if (!sessionManager.isSessionOwner(sid, currentPrincipal()))
+        return c.json(
+          {
+            jsonrpc: '2.0',
+            error: {
+              code: -32001,
+              message: 'Session not found. Please reinitialize.',
+            },
+            id: null,
+          },
+          404,
+        );
+      return authContext.run(
+        { ...authContext.getStore(), sessionId: sid },
+        next,
+      );
+    }
+    return next();
+  });
 
   // No queue: admission fails immediately. Leases persist through response streams.
   app.use(config.mcpHttpEndpointPath, async (c, next) => {
@@ -355,20 +416,8 @@ export function createHttpApp(
       );
     }
 
-    const transport = transports.get(sessionId);
-    if (!transport) {
-      return c.json(
-        {
-          jsonrpc: '2.0',
-          error: {
-            code: -32001,
-            message: 'Session not found or already expired',
-          },
-          id: null,
-        },
-        404,
-      );
-    }
+    const transport = getSessionTransport(sessionId);
+    if (transport instanceof Response) return transport;
 
     // Delegate to transport's internal DELETE handling (closes streams)
     const response = await transport.handleRequest(c.req.raw);
@@ -457,20 +506,23 @@ export function createHttpApp(
         );
         if (closing) throw new HttpLimitError(503, 'HTTP app is closing.');
         const activeServer = server;
+        const newSessionId = randomUUID();
+        const owner = currentPrincipal();
         transport = new StreamableHTTPTransport({
           enableJsonResponse: true,
           maxRequestBodySize: policy.maxBodyBytes,
-          sessionIdGenerator: () => randomUUID(),
+          sessionIdGenerator: () => newSessionId,
           onsessioninitialized: (sid: string) => {
             initialized = sid;
             transports.set(sid, transport!);
             servers.set(sid, activeServer);
             sessionReleases.set(sid, releaseSession!);
-            const store = authContext.getStore();
+            sessionOwners.set(sid, owner);
             sessionManager.createSession(
               sid,
-              store?.authInfo.clientId,
-              store?.authInfo.tenantId,
+              owner.clientId,
+              owner.tenantId,
+              owner,
             );
             logger.debug('New MCP session initialized', {
               ...transportContext,
@@ -486,12 +538,18 @@ export function createHttpApp(
           },
         });
 
-        await server.connect(transport);
-        const response = await dispatchWithDeadline(
-          transport,
-          c.req.raw,
-          body,
-          policy.requestTimeoutMs,
+        const activeTransport = transport;
+        const response = await authContext.run(
+          { ...authContext.getStore(), sessionId: newSessionId },
+          async () => {
+            await activeServer.connect(activeTransport);
+            return dispatchWithDeadline(
+              activeTransport,
+              c.req.raw,
+              body,
+              policy.requestTimeoutMs,
+            );
+          },
         );
         if (!initialized || response.status >= 400) {
           if (initialized) await cleanup(initialized);

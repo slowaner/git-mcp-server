@@ -5,6 +5,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { R2Provider } from '../../../../src/storage/providers/cloudflare/r2Provider.js';
 import { McpError } from '../../../../src/types-global/errors.js';
+import {
+  encodeStorageKey,
+  storageTenantPrefix,
+} from '@/storage/core/storageKeyCodec.js';
 import type { RequestContext } from '../../../../src/utils/index.js';
 import { requestContextService } from '../../../../src/utils/index.js';
 
@@ -35,7 +39,9 @@ describe('R2Provider', () => {
       mockBucket.get.mockResolvedValue(null);
       const result = await r2Provider.get('tenant-1', 'key-1', context);
       expect(result).toBeNull();
-      expect(mockBucket.get).toHaveBeenCalledWith('tenant-1:key-1');
+      expect(mockBucket.get).toHaveBeenCalledWith(
+        encodeStorageKey('tenant-1', 'key-1'),
+      );
     });
 
     it('should return parsed JSON object if found', async () => {
@@ -79,7 +85,9 @@ describe('R2Provider', () => {
       const result = await r2Provider.get('tenant-1', 'key-1', context);
 
       expect(result).toBeNull();
-      expect(mockBucket.delete).toHaveBeenCalledWith('tenant-1:key-1');
+      expect(mockBucket.delete).toHaveBeenCalledWith(
+        encodeStorageKey('tenant-1', 'key-1'),
+      );
     });
   });
 
@@ -92,7 +100,7 @@ describe('R2Provider', () => {
       };
       await r2Provider.set('tenant-1', 'key-1', value, context);
       expect(mockBucket.put).toHaveBeenCalledWith(
-        'tenant-1:key-1',
+        encodeStorageKey('tenant-1', 'key-1'),
         JSON.stringify(expectedEnvelope),
       );
     });
@@ -108,7 +116,7 @@ describe('R2Provider', () => {
       const [key, body] = mockBucket.put.mock.calls[0]!;
       const envelope = JSON.parse(body);
 
-      expect(key).toBe('tenant-1:key-1');
+      expect(key).toBe(encodeStorageKey('tenant-1', 'key-1'));
       expect(envelope.value).toEqual(value);
       expect(envelope.__mcp.v).toBe(1);
       expect(envelope.__mcp.expiresAt).toBeGreaterThanOrEqual(now + ttl * 1000);
@@ -129,7 +137,9 @@ describe('R2Provider', () => {
       mockBucket.head.mockResolvedValue({}); // Mock a non-null response
       const result = await r2Provider.delete('tenant-1', 'key-1', context);
       expect(result).toBe(true);
-      expect(mockBucket.delete).toHaveBeenCalledWith('tenant-1:key-1');
+      expect(mockBucket.delete).toHaveBeenCalledWith(
+        encodeStorageKey('tenant-1', 'key-1'),
+      );
     });
   });
 
@@ -137,18 +147,17 @@ describe('R2Provider', () => {
     it('should return a list of keys with tenant prefix stripped', async () => {
       mockBucket.list.mockResolvedValue({
         objects: [
-          { key: 'tenant-1:key-1' },
-          { key: 'tenant-1:key-2' },
-          { key: 'unrelated-key' },
+          { key: encodeStorageKey('tenant-1', 'key-1') },
+          { key: encodeStorageKey('tenant-1', 'key-2') },
         ],
         truncated: false,
       });
       const result = await r2Provider.list('tenant-1', 'key', context);
-      expect(result.keys).toEqual(['key-1', 'key-2', 'unrelated-key']);
+      expect(result.keys).toEqual(['key-1', 'key-2']);
       expect(result.nextCursor).toBeUndefined();
       expect(mockBucket.list).toHaveBeenCalledWith(
         expect.objectContaining({
-          prefix: 'tenant-1:key',
+          prefix: encodeStorageKey('tenant-1', 'key'),
           limit: 1001,
         }),
       );
@@ -157,9 +166,9 @@ describe('R2Provider', () => {
     it('should apply limit, cursor, and expose next cursor when truncated', async () => {
       const listedResponse = {
         objects: [
-          { key: 'tenant-1:key-a' },
-          { key: 'tenant-1:key-b' },
-          { key: 'tenant-1:key-c' },
+          { key: encodeStorageKey('tenant-1', 'key-a') },
+          { key: encodeStorageKey('tenant-1', 'key-b') },
+          { key: encodeStorageKey('tenant-1', 'key-c') },
         ],
         truncated: true,
         cursor: 'cursor-token',
@@ -178,7 +187,7 @@ describe('R2Provider', () => {
       expect(mockBucket.list).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
-          prefix: 'tenant-1:key',
+          prefix: encodeStorageKey('tenant-1', 'key'),
           limit: 3,
           cursor: 'incoming-cursor',
         }),
@@ -261,12 +270,15 @@ describe('R2Provider', () => {
     it('should iterate through pages and delete all keys for a tenant', async () => {
       mockBucket.list
         .mockResolvedValueOnce({
-          objects: [{ key: 'tenant-1:key-1' }, { key: 'tenant-1:key-2' }],
+          objects: [
+            { key: encodeStorageKey('tenant-1', 'key-1') },
+            { key: encodeStorageKey('tenant-1', 'key-2') },
+          ],
           truncated: true,
           cursor: 'cursor-token',
         })
         .mockResolvedValueOnce({
-          objects: [{ key: 'tenant-1:key-3' }],
+          objects: [{ key: encodeStorageKey('tenant-1', 'key-3') }],
           truncated: false,
         });
 
@@ -276,7 +288,7 @@ describe('R2Provider', () => {
       expect(mockBucket.delete).toHaveBeenCalledTimes(3);
       expect(mockBucket.list).toHaveBeenNthCalledWith(
         1,
-        expect.objectContaining({ prefix: 'tenant-1:' }),
+        expect.objectContaining({ prefix: storageTenantPrefix('tenant-1') }),
       );
       expect(mockBucket.list).toHaveBeenNthCalledWith(
         2,

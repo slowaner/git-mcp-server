@@ -12,11 +12,16 @@
  * @module src/mcp-server/transports/http/sessionManager
  */
 import { logger, requestContextService } from '@/utils/index.js';
+import {
+  samePrincipal,
+  type VerifiedPrincipal,
+} from '../auth/lib/verifiedPrincipal.js';
 
 /**
  * Metadata tracked for each HTTP session.
  */
 interface SessionMetadata {
+  readonly owner?: VerifiedPrincipal;
   /** Unique session identifier */
   sessionId: string;
   /** Timestamp when session was created (milliseconds since epoch) */
@@ -125,6 +130,7 @@ export class SessionManager {
     sessionId: string,
     clientId?: string,
     tenantId?: string,
+    owner?: VerifiedPrincipal,
   ): string {
     const now = Date.now();
     const metadata: SessionMetadata = {
@@ -133,6 +139,7 @@ export class SessionManager {
       lastActivityAt: now,
       ...(clientId !== undefined && { clientId }),
       ...(tenantId !== undefined && { tenantId }),
+      ...(owner && { owner: Object.freeze({ ...owner }) }),
     };
 
     this.sessions.set(sessionId, metadata);
@@ -148,6 +155,15 @@ export class SessionManager {
     });
 
     return sessionId;
+  }
+
+  /** Pure owner comparison: no expiry, cleanup, activity update or lease change. */
+  public isSessionOwner(
+    sessionId: string,
+    principal: VerifiedPrincipal,
+  ): boolean {
+    const owner = this.sessions.get(sessionId)?.owner;
+    return owner !== undefined && samePrincipal(owner, principal);
   }
 
   /**

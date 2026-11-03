@@ -221,7 +221,7 @@ describe('stdio multi-root paths', () => {
       await legacy.close();
     }
   }, 30_000);
-  it('revalidates a persisted cwd after a root is removed', async () => {
+  it('does not inherit a previous server session cwd after a root is removed', async () => {
     const storedEnv = {
       ...env,
       STORAGE_PROVIDER_TYPE: 'filesystem',
@@ -256,7 +256,9 @@ describe('stdio multi-root paths', () => {
         arguments: { path: '.' },
       });
       expect(Boolean(status.isError)).toBe(true);
-      expect(JSON.stringify(status.content)).toContain('Path traversal');
+      expect(JSON.stringify(status.content)).toContain(
+        'No session working directory set',
+      );
     } finally {
       await reader.close();
     }

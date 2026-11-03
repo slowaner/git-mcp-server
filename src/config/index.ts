@@ -8,6 +8,7 @@
  * @module src/config/index
  */
 import { homedir } from 'os';
+import { validateAuthenticationConfiguration } from '@/mcp-server/transports/auth/lib/authConfiguration.js';
 import path from 'node:path';
 
 import { z } from 'zod';
@@ -645,6 +646,7 @@ const parseConfig = () => {
     );
   }
 
+  validateAuthenticationConfiguration(parsedConfig.data);
   return parsedConfig.data;
 };
 

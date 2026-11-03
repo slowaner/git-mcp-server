@@ -6,6 +6,7 @@
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { logger, requestContextService } from '@/utils/index.js';
 import { authContext } from '@/mcp-server/transports/auth/lib/authContext.js';
+import { authenticationRequired, currentPrincipal } from './requestIdentity.js';
 
 /**
  * Checks if the current authentication context contains all the specified scopes.
@@ -26,12 +27,16 @@ export function withRequiredScopes(requiredScopes: string[]): void {
 
   const store = authContext.getStore();
 
-  // If no auth store is found, it means auth is not configured. Default to allowed for template usability.
+  if (authenticationRequired()) currentPrincipal();
+  // Only disabled authentication or an explicit local host scope permits absence.
   if (!store || !store.authInfo) {
-    logger.debug(
-      'No authentication context found. Defaulting to allowed for demonstration purposes.',
-      initialContext,
-    );
+    if (authenticationRequired()) {
+      throw new McpError(
+        JsonRpcErrorCode.Unauthorized,
+        'Verified authentication context is required.',
+      );
+    }
+    logger.debug('Using explicit unauthenticated host policy.', initialContext);
     return;
   }
 

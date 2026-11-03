@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/helpers/mockStorageService
  */
 import type { RequestContext } from '@/utils/index.js';
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import type {
   StorageOptions,
   ListOptions,
@@ -183,7 +184,7 @@ export function createMockStorageWithSession(
   } as RequestContext;
 
   // Set working directory in session storage
-  storage.set(`session:workingDir:${tenantId}`, workingDir, context);
+  workingDirectoryStore(storage, context).set(workingDir);
 
   return storage;
 }
