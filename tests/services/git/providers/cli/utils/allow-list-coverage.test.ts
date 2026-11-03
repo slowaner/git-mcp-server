@@ -40,6 +40,10 @@ function collectFlagLiterals(): Map<string, string[]> {
   const flags = new Map<string, string[]>();
   for (const file of listSourceFiles(OPERATIONS_DIR)) {
     if (file === ALLOW_LIST_FILE) continue; // the list itself is not an emitter
+    // This file emits fixed runtime-bootstrap argv, not Git argv. Do not grant
+    // Git's executable-config -e flag to accommodate a host-runtime switch.
+    if (file === join(OPERATIONS_DIR, 'utils', 'process-supervision.ts'))
+      continue;
     const source = stripComments(readFileSync(file, 'utf8'));
     for (const match of source.matchAll(/['"`](-{1,2}[A-Za-z][\w-]*|--)/g)) {
       const flag = match[1]!;

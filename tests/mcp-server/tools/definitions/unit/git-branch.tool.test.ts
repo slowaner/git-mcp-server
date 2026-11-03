@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/unit/git-branch.tool.test
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitBranchTool } from '@/mcp-server/tools/definitions/git-branch.tool.js';
@@ -22,6 +23,8 @@ import {
 } from '../helpers/index.js';
 import type { GitBranchResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
+
+installTrustedGitFixture();
 
 describe('git_branch tool', () => {
   const mockProvider = createMockGitProvider();

@@ -55,81 +55,61 @@ describe('Command Builder', () => {
   });
 
   describe('buildGitEnv', () => {
-    it('should preserve PATH from process.env', () => {
-      const result = buildGitEnv();
-
-      // PATH should be preserved (critical for finding git executable)
-      expect(result.PATH).toBe(process.env.PATH);
+    const policy = {
+      profile: 'trusted' as const,
+      binaryPath: '/usr/bin/git',
+      homeDirectory: '/tmp/operator-home',
+      helperPath: '/usr/bin:/bin',
+    };
+    it('uses operator HOME/PATH and fixed noninteractive settings', () => {
+      const env = buildGitEnv(
+        { HOME: '/outside', PATH: '/outside', GIT_TERMINAL_PROMPT: '1' },
+        policy,
+      );
+      expect(env.HOME).toBe('/tmp/operator-home');
+      expect(env.PATH).toBe('/usr/bin:/bin');
+      expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+      expect(env.LANG).toBe('en_US.UTF-8');
     });
-
-    it('should set GIT_TERMINAL_PROMPT to 0', () => {
-      const result = buildGitEnv();
-
-      // Disable interactive prompts
-      expect(result.GIT_TERMINAL_PROMPT).toBe('0');
+    it('strips routing, injected config and unrelated secrets', () => {
+      const env = buildGitEnv(
+        {
+          GIT_DIR: '/outside',
+          GIT_CONFIG_COUNT: '1',
+          SERVER_SECRET: 'fixture',
+          NODE_OPTIONS: '--require=fixture',
+        },
+        policy,
+      );
+      for (const key of [
+        'GIT_DIR',
+        'GIT_CONFIG_COUNT',
+        'SERVER_SECRET',
+        'NODE_OPTIONS',
+      ])
+        expect(env[key]).toBeUndefined();
     });
-
-    it('should set UTF-8 locale', () => {
-      const result = buildGitEnv();
-
-      expect(result.LANG).toBe('en_US.UTF-8');
-      expect(result.LC_ALL).toBe('en_US.UTF-8');
+    it('retains explicit trusted agent/keyring authority', () => {
+      const env = buildGitEnv(
+        { SSH_AUTH_SOCK: '/operator/agent', GNUPGHOME: '/operator/keyring' },
+        policy,
+      );
+      expect(env.SSH_AUTH_SOCK).toBe('/operator/agent');
+      expect(env.GNUPGHOME).toBe('/operator/keyring');
     });
-
-    it('should allow overriding defaults with additionalEnv', () => {
-      const result = buildGitEnv({
-        GIT_TERMINAL_PROMPT: '1',
-        CUSTOM_VAR: 'custom_value',
-      });
-
-      expect(result.GIT_TERMINAL_PROMPT).toBe('1');
-      expect(result.CUSTOM_VAR).toBe('custom_value');
-    });
-
-    it('should preserve other process environment variables', () => {
-      const result = buildGitEnv();
-
-      // HOME/USER should be preserved
-      if (process.env.HOME) {
-        expect(result.HOME).toBe(process.env.HOME);
-      }
-      if (process.env.USER) {
-        expect(result.USER).toBe(process.env.USER);
-      }
-    });
-
-    it('should return a new object each time', () => {
-      const result1 = buildGitEnv();
-      const result2 = buildGitEnv();
-
-      expect(result1).not.toBe(result2);
-      expect(result1).toEqual(result2);
-    });
-
-    it('should not mutate process.env', () => {
-      const originalTerminalPrompt = process.env.GIT_TERMINAL_PROMPT;
-
-      buildGitEnv({ GIT_TERMINAL_PROMPT: 'modified' });
-
-      expect(process.env.GIT_TERMINAL_PROMPT).toBe(originalTerminalPrompt);
-    });
-
-    it('should handle undefined additionalEnv', () => {
-      const result = buildGitEnv(undefined);
-
-      expect(result.GIT_TERMINAL_PROMPT).toBe('0');
-      expect(result.PATH).toBe(process.env.PATH);
-    });
-
-    it('should handle empty additionalEnv', () => {
-      const result = buildGitEnv({});
-
-      expect(result.GIT_TERMINAL_PROMPT).toBe('0');
-      expect(result.PATH).toBe(process.env.PATH);
+    it('does not mutate inherited input or share output objects', () => {
+      const input = { PATH: '/outside' };
+      expect(buildGitEnv(input, policy)).not.toBe(buildGitEnv(input, policy));
+      expect(input).toEqual({ PATH: '/outside' });
     });
   });
 
   describe('validateGitArgs', () => {
+    it('does not grant runtime eval or native config routing short flags to Git', () => {
+      for (const flag of ['-e', '-c', '-C', '-o']) {
+        expect(() => validateGitArgs([flag])).toThrow(/Unsafe git flag/i);
+      }
+    });
     it('should accept valid arguments', () => {
       expect(() => validateGitArgs(['status'])).not.toThrow();
       expect(() => validateGitArgs(['commit', '-m', 'message'])).not.toThrow();

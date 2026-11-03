@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/unit/git-reflog.tool.test
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitReflogTool } from '@/mcp-server/tools/definitions/git-reflog.tool.js';
@@ -23,6 +24,8 @@ import {
 } from '../helpers/index.js';
 import type { GitReflogResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
+
+installTrustedGitFixture();
 
 describe('git_reflog tool', () => {
   const mockProvider = createMockGitProvider();

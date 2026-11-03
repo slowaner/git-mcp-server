@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/unit/git-checkout.tool.test
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitCheckoutTool } from '@/mcp-server/tools/definitions/git-checkout.tool.js';
@@ -23,6 +24,8 @@ import {
 } from '../helpers/index.js';
 import type { GitCheckoutResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
+
+installTrustedGitFixture();
 
 describe('git_checkout tool', () => {
   const mockProvider = createMockGitProvider();

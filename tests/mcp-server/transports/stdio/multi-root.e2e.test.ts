@@ -26,7 +26,7 @@ describe('stdio multi-root paths', () => {
   let env: Record<string, string>;
 
   function git(args: string[], cwd: string): void {
-    const result = Bun.spawnSync(['git', ...args], { cwd, env });
+    const result = Bun.spawnSync(['/usr/bin/git', ...args], { cwd, env });
     if (result.exitCode !== 0) throw new Error(result.stderr.toString());
   }
   async function call(
@@ -47,7 +47,7 @@ describe('stdio multi-root paths', () => {
     repo = join(first, 'repo');
     mkdirSync(repo, { recursive: true });
     mkdirSync(second);
-    const globalConfig = join(root, 'gitconfig');
+    const globalConfig = join(root, '.gitconfig');
     writeFileSync(
       globalConfig,
       '[user]\n name = Fixture\n email = fixture@example.com\n[commit]\n gpgSign = false\n[tag]\n gpgSign = false\n',
@@ -55,8 +55,11 @@ describe('stdio multi-root paths', () => {
     env = {
       ...(process.env as Record<string, string>),
       NODE_ENV: 'test',
-      GIT_CONFIG_GLOBAL: globalConfig,
-      GIT_CONFIG_NOSYSTEM: '1',
+      HOME: root,
+      GIT_EXECUTION_PROFILE: 'trusted',
+      GIT_BINARY_PATH: '/usr/bin/git',
+      GIT_TRUSTED_HOME: root,
+      GIT_TRUSTED_PATH: '/usr/bin:/bin',
       GIT_SIGN_COMMITS: 'false',
       GIT_BASE_DIR: ` ${first}, ${second} `,
       MCP_TRANSPORT_TYPE: 'stdio',

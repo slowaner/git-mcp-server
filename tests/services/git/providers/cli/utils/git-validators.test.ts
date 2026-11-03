@@ -18,7 +18,12 @@ import {
   validateGitRepository,
 } from '@/services/git/providers/cli/utils/git-validators.js';
 import { McpError } from '@/types-global/errors.js';
-import { createTestContext } from '../../../../../mcp-server/tools/definitions/helpers/testContext.js';
+import {
+  createTestContext,
+  installTrustedGitFixture,
+} from '../../../../../mcp-server/tools/definitions/helpers/testContext.js';
+
+installTrustedGitFixture();
 
 function git(args: string[], cwd: string): void {
   const proc = Bun.spawnSync(['git', ...args], { cwd });
