@@ -10,7 +10,6 @@
 import { homedir } from 'os';
 import path from 'node:path';
 
-import dotenv from 'dotenv';
 import { z } from 'zod';
 
 import packageJson from '../../package.json' with { type: 'json' };
@@ -27,8 +26,8 @@ type PackageManifest = {
 };
 
 const packageManifest = packageJson as PackageManifest;
-// Suppress dotenv's noisy initial log message as suggested by its output.
-dotenv.config({ quiet: true });
+// Authority comes only from the operator-prepared inherited environment.
+// Never load configuration implicitly from a repository/current-directory file.
 
 // --- Helper Functions ---
 const emptyStringAsUndefined = (val: unknown) => {
@@ -285,54 +284,156 @@ const ConfigSchema = z.object({
       z.string().default('./.storage'),
     ), // Supports tilde expansion for filesystem storage
   }),
-  git: z.object({
-    provider: z.preprocess(
-      emptyStringAsUndefined,
-      z.enum(['auto', 'cli', 'isomorphic']).default('auto'),
-    ),
-    signCommits: z.preprocess(parseBoolEnv(true), z.boolean()),
-    authorName: z
-      .string()
-      .regex(
-        /^[^\n\r\0]*$/,
-        'Git author name must not contain newlines or null bytes',
-      )
-      .optional(),
-    authorEmail: z.string().email().optional(),
-    committerName: z
-      .string()
-      .regex(
-        /^[^\n\r\0]*$/,
-        'Git committer name must not contain newlines or null bytes',
-      )
-      .optional(),
-    committerEmail: z.string().email().optional(),
-    wrapupInstructionsPath: z.preprocess(
-      expandTildePath,
-      z.string().optional(),
-    ), // Supports tilde expansion for custom wrapup instructions
-    baseDirs: z.preprocess(
-      (value) =>
-        typeof value === 'string'
-          ? value.split(',').map((entry) => expandTildePath(entry))
-          : value,
-      z
-        .array(
+  git: z
+    .object({
+      executionProfile: z
+        .preprocess(
+          emptyStringAsUndefined,
+          z.enum(['restricted', 'trusted']).default('restricted'),
+        )
+        .describe(
+          'Explicit Git trust profile; restricted requires a verified OS sandbox and otherwise rejects execution.',
+        ),
+      binaryPath: z
+        .preprocess(
+          emptyStringAsUndefined,
           z
             .string()
-            .refine((root) => isAbsolutePath(root) && !root.includes('\0'), {
-              message: 'Every GIT_BASE_DIR entry must be an absolute path',
-            }),
+            .default('/usr/bin/git')
+            .refine(
+              (value) => isAbsolutePath(value) && !value.includes('\0'),
+              'Git binary path must be absolute.',
+            ),
         )
-        .min(1)
-        .transform((roots) => [
-          ...new Set(roots.map((root) => path.resolve(root))),
-        ])
+        .describe('Operator-controlled absolute native Git executable.'),
+      trustedHome: z
+        .preprocess(
+          expandTildePath,
+          z
+            .string()
+            .default(homedir())
+            .refine(
+              (value) => isAbsolutePath(value) && !value.includes('\0'),
+              'Trusted Git HOME must be absolute.',
+            ),
+        )
+        .describe(
+          'Operator-owned HOME for explicitly trusted native configuration and signing.',
+        ),
+      trustedPath: z
+        .preprocess(
+          emptyStringAsUndefined,
+          z
+            .string()
+            .default('/usr/bin:/bin:/usr/sbin:/sbin')
+            .refine(
+              (value) =>
+                !value.includes('\0') &&
+                value
+                  .split(path.delimiter)
+                  .every((entry) => isAbsolutePath(entry)),
+              'Every trusted helper PATH directory must be absolute.',
+            ),
+        )
+        .describe('Explicit helper search path for the trusted Git profile.'),
+      provider: z.preprocess(
+        emptyStringAsUndefined,
+        z.enum(['auto', 'cli', 'isomorphic']).default('auto'),
+      ),
+      signCommits: z.preprocess(parseBoolEnv(true), z.boolean()),
+      authorName: z
+        .string()
+        .regex(
+          /^[^\n\r\0]*$/,
+          'Git author name must not contain newlines or null bytes',
+        )
         .optional(),
-    ),
-    maxCommandTimeoutMs: z.coerce.number().default(30000),
-    maxBufferSizeMb: z.coerce.number().default(10),
-  }),
+      authorEmail: z.string().email().optional(),
+      committerName: z
+        .string()
+        .regex(
+          /^[^\n\r\0]*$/,
+          'Git committer name must not contain newlines or null bytes',
+        )
+        .optional(),
+      committerEmail: z.string().email().optional(),
+      wrapupInstructionsPath: z.preprocess(
+        expandTildePath,
+        z.string().optional(),
+      ), // Supports tilde expansion for custom wrapup instructions
+      baseDirs: z.preprocess(
+        (value) =>
+          typeof value === 'string'
+            ? value.split(',').map((entry) => expandTildePath(entry))
+            : value,
+        z
+          .array(
+            z
+              .string()
+              .refine((root) => isAbsolutePath(root) && !root.includes('\0'), {
+                message: 'Every GIT_BASE_DIR entry must be an absolute path',
+              }),
+          )
+          .min(1)
+          .transform((roots) => [
+            ...new Set(roots.map((root) => path.resolve(root))),
+          ])
+          .optional(),
+      ),
+      maxCommandTimeoutMs: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(2147483647)
+        .default(30000)
+        .describe('Total native Git operation deadline in milliseconds.'),
+      maxBufferSizeMb: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(128)
+        .default(10)
+        .describe(
+          'Legacy aggregate raw-output budget in MiB when byte limits are unset.',
+        ),
+      maxOutputBytes: z
+        .preprocess(
+          emptyStringAsUndefined,
+          z.coerce.number().int().min(1).max(134217728).optional(),
+        )
+        .describe(
+          'Aggregate raw stdout/stderr byte budget across every Git call in one request.',
+        ),
+      maxStdoutBytes: z
+        .preprocess(
+          emptyStringAsUndefined,
+          z.coerce.number().int().min(1).max(134217728).optional(),
+        )
+        .describe('Independent stdout byte cap for each native Git command.'),
+      maxStderrBytes: z
+        .preprocess(
+          emptyStringAsUndefined,
+          z.coerce.number().int().min(1).max(134217728).optional(),
+        )
+        .describe('Independent stderr byte cap for each native Git command.'),
+      terminationGraceMs: z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(5000)
+        .default(250)
+        .describe('Bounded TERM-to-KILL grace for the owned process group.'),
+    })
+    .transform((git) => {
+      const maxOutputBytes =
+        git.maxOutputBytes ?? git.maxBufferSizeMb * 1024 * 1024;
+      return {
+        ...git,
+        maxOutputBytes,
+        maxStdoutBytes: git.maxStdoutBytes ?? maxOutputBytes,
+        maxStderrBytes: git.maxStderrBytes ?? maxOutputBytes,
+      };
+    }),
   openTelemetry: z.object({
     enabled: z.coerce.boolean().default(false),
     serviceName: z.string(),
@@ -475,8 +576,16 @@ const parseConfig = () => {
         undefined,
       wrapupInstructionsPath: env.GIT_WRAPUP_INSTRUCTIONS_PATH,
       baseDirs: env.GIT_BASE_DIR,
+      executionProfile: env.GIT_EXECUTION_PROFILE,
+      binaryPath: env.GIT_BINARY_PATH,
+      trustedHome: env.GIT_TRUSTED_HOME,
+      trustedPath: env.GIT_TRUSTED_PATH,
       maxCommandTimeoutMs: env.GIT_MAX_COMMAND_TIMEOUT_MS,
       maxBufferSizeMb: env.GIT_MAX_BUFFER_SIZE_MB,
+      maxOutputBytes: env.GIT_MAX_OUTPUT_BYTES,
+      maxStdoutBytes: env.GIT_MAX_STDOUT_BYTES,
+      maxStderrBytes: env.GIT_MAX_STDERR_BYTES,
+      terminationGraceMs: env.GIT_TERMINATION_GRACE_MS,
     },
     openTelemetry: {
       enabled: env.OTEL_ENABLED,

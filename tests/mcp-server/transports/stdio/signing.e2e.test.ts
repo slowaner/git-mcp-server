@@ -104,7 +104,7 @@ describe('stdio transport: native Git signing', () => {
 
   beforeAll(async () => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'git-mcp-signing-e2e-')));
-    globalConfig = join(root, 'gitconfig');
+    globalConfig = join(root, '.gitconfig');
     env = { ...(process.env as Record<string, string>) };
     // These are test fixtures, independent of the developer's config, identity,
     // signing keys, and any MCP deployment environment overrides.
@@ -112,8 +112,11 @@ describe('stdio transport: native Git signing', () => {
       if (key.startsWith('GIT_')) delete env[key];
     }
     Object.assign(env, {
-      GIT_CONFIG_NOSYSTEM: '1',
-      GIT_CONFIG_GLOBAL: globalConfig,
+      HOME: root,
+      GIT_EXECUTION_PROFILE: 'trusted',
+      GIT_BINARY_PATH: '/usr/bin/git',
+      GIT_TRUSTED_HOME: root,
+      GIT_TRUSTED_PATH: '/usr/bin:/bin',
       GIT_PROVIDER: 'cli',
       GIT_SIGN_COMMITS: 'false',
       GIT_EDITOR: 'true',

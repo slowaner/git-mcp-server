@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { config } from '../../../../../../src/config/index.js';
 
 import {
   detectRuntime,
@@ -22,6 +23,15 @@ import {
 } from '../../../../../../src/services/git/providers/cli/utils/runtime-adapter.js';
 
 describe('Runtime Adapter', () => {
+  let savedGit: typeof config.git;
+  beforeEach(() => {
+    savedGit = { ...config.git };
+    config.git.executionProfile = 'trusted';
+    config.git.binaryPath = '/usr/bin/git';
+  });
+  afterEach(() => {
+    Object.assign(config.git, savedGit);
+  });
   describe('detectRuntime', () => {
     // Note: We cannot mock globalThis.Bun in Bun runtime (readonly)
     // These tests verify behavior in the current runtime environment
@@ -159,6 +169,7 @@ describe('Runtime Adapter', () => {
         'utf8',
       );
       await chmod(shim, 0o755);
+      config.git.binaryPath = shim;
 
       originalPath = process.env.PATH;
       process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ''}`;

@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/unit/git-commit.tool.test
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitCommitTool } from '@/mcp-server/tools/definitions/git-commit.tool.js';
@@ -22,6 +23,8 @@ import {
 } from '../helpers/index.js';
 import type { GitCommitResult, GitStatusResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
+
+installTrustedGitFixture();
 
 describe('git_commit tool', () => {
   const mockProvider = createMockGitProvider();

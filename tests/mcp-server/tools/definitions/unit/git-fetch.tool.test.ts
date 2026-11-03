@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/unit/git-fetch.tool.test
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitFetchTool } from '@/mcp-server/tools/definitions/git-fetch.tool.js';
@@ -23,6 +24,8 @@ import {
 } from '../helpers/index.js';
 import type { GitFetchResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
+
+installTrustedGitFixture();
 
 describe('git_fetch tool', () => {
   const mockProvider = createMockGitProvider();

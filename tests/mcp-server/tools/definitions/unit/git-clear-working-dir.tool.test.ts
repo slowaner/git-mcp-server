@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/unit/git-clear-working-dir.tool.test
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitClearWorkingDirTool } from '@/mcp-server/tools/definitions/git-clear-working-dir.tool.js';
@@ -20,6 +21,8 @@ import {
   assertLlmFriendlyFormat,
 } from '../helpers/index.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
+
+installTrustedGitFixture();
 
 describe('git_clear_working_dir tool', () => {
   const mockProvider = createMockGitProvider();

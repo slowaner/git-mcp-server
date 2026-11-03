@@ -8,6 +8,10 @@ import {
   McpServer,
   ResourceTemplate,
 } from '@modelcontextprotocol/sdk/server/mcp.js';
+import {
+  assertConfiguredGitExecutionPolicy,
+  withConfiguredGitExecutionContext,
+} from '@/services/git/providers/cli/utils/configured-execution-policy.js';
 import type { ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 import type { ZodObject, ZodRawShape, z } from 'zod';
 
@@ -138,10 +142,12 @@ export async function registerResource<
                 ? z.infer<TOutputSchema>
                 : unknown;
             const parsedParams = def.paramsSchema.parse(params);
-            const responseData = (await def.logic(
-              uri,
-              parsedParams,
-              handlerContext,
+            const responseData = (await withConfiguredGitExecutionContext(
+              callContext.signal,
+              async () => {
+                assertConfiguredGitExecutionPolicy();
+                return await def.logic(uri, parsedParams, handlerContext);
+              },
             )) as TOutput;
 
             const rawContents: unknown = formatter(responseData, {
