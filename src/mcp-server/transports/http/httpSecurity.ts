@@ -44,6 +44,7 @@ export const HttpSecuritySchema = z
             try {
               const url = new URL(`http://${host}`);
               return (
+                !host.includes('*') &&
                 url.host === host.toLowerCase() &&
                 url.pathname === '/' &&
                 !url.username &&
@@ -52,7 +53,8 @@ export const HttpSecuritySchema = z
             } catch {
               return false;
             }
-          }, 'Expected exact host[:port], including brackets for IPv6.'),
+          }, 'Expected exact host[:port], including brackets for IPv6.')
+          .transform((host) => host.toLowerCase()),
       )
       .max(64)
       .default([])
@@ -214,11 +216,11 @@ export async function readBoundedJson(
     if (request.signal.aborted) onAbort();
   });
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  let bytes = 0;
-  let text = '';
-  try {
+  const readBody = async (): Promise<string> => {
+    let bytes = 0;
+    let text = '';
     while (true) {
-      const chunk = await Promise.race([reader.read(), failure]);
+      const chunk = await reader.read();
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
       if (bytes > policy.maxBodyBytes)
@@ -226,6 +228,12 @@ export async function readBoundedJson(
       text += decoder.decode(chunk.value, { stream: true });
     }
     text += decoder.decode();
+    return text;
+  };
+  try {
+    // A single race retains only one deadline subscription, regardless of chunks.
+    // Cancellation below settles the outstanding read when the deadline wins.
+    const text = await Promise.race([readBody(), failure]);
     // Bound nesting before JSON.parse, including objects that have few elements.
     let depth = 0;
     let quoted = false;

@@ -745,7 +745,11 @@ export class CliGitProvider extends BaseGitProvider implements IGitProvider {
   ): Promise<void> {
     this.logOperationStart('validateRepository', context, { path });
     await this.runOperation(context, () =>
-      validateGitRepository(path, context.requestContext),
+      validateGitRepository(path, context.requestContext, {
+        signal: context.signal,
+        deadline: context.deadline,
+        repositoryRoots: context.repositoryRoots,
+      }),
     );
     this.logOperationSuccess('validateRepository', context, { path });
   }

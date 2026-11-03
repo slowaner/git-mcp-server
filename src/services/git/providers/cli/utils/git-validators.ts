@@ -9,7 +9,7 @@
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { logger, type RequestContext } from '@/utils/index.js';
 
-import { executeGitCommand } from './git-executor.js';
+import { executeGitCommand, type ExecuteGitOptions } from './git-executor.js';
 
 /**
  * Validate that a directory is a git repository.
@@ -19,6 +19,7 @@ import { executeGitCommand } from './git-executor.js';
  *
  * @param path - Path to check
  * @param context - Request context for logging
+ * @param options - Server-owned controls composed with the current request scope
  * @returns Promise resolving to true if valid git repository
  * @throws {McpError} If not a git repository or path is invalid
  *
@@ -31,11 +32,13 @@ import { executeGitCommand } from './git-executor.js';
 export async function validateGitRepository(
   path: string,
   _context: RequestContext,
+  options: ExecuteGitOptions = {},
 ): Promise<boolean> {
   try {
     const result = await executeGitCommand(
       ['rev-parse', '--is-inside-work-tree'],
       path,
+      options,
     );
 
     if (result.stdout.trim() !== 'true') {
