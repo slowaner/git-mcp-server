@@ -2,7 +2,7 @@
  * @fileoverview HTTP parsing, peer trust, domain and fair admission boundary regressions.
  * @module tests/security/http-security
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { HttpAdmission } from '../../src/mcp-server/transports/http/httpAdmission.js';
 import {
   assertInputBudget,
@@ -22,6 +22,54 @@ const request = (text: string) =>
   new Request('http://localhost/mcp', { method: 'POST', body: text });
 
 describe('peer trust', () => {
+  test('schema canonicalizes DNS/IPv6 authorities before peer comparison', () => {
+    const configured = HttpSecuritySchema.parse({
+      allowedHosts: [
+        'LOCALHOST:3015',
+        'MiXeD.ExAmPlE:8443',
+        '[2001:DB8::1]:3015',
+      ],
+    });
+    expect(configured.allowedHosts).toEqual([
+      'localhost:3015',
+      'mixed.example:8443',
+      '[2001:db8::1]:3015',
+    ]);
+    for (const host of [
+      'LoCaLhOsT:3015',
+      'MIXED.example:8443',
+      '[2001:DB8::1]:3015',
+    ])
+      expect(() =>
+        validateHttpPeer(
+          new Request('http://localhost/mcp', { headers: { host } }),
+          configured.allowedHosts,
+          [],
+          true,
+        ),
+      ).not.toThrow();
+    for (const host of [
+      'mixed.example:3015',
+      'mixed.example.evil:8443',
+      '[2001:db8::2]:3015',
+    ])
+      expect(() =>
+        validateHttpPeer(
+          new Request('http://localhost/mcp', { headers: { host } }),
+          configured.allowedHosts,
+          [],
+          true,
+        ),
+      ).toThrow('Host');
+    for (const host of [
+      'user@mixed.example:8443',
+      'mixed.example:8443/path',
+      '*.example',
+    ])
+      expect(
+        HttpSecuritySchema.safeParse({ allowedHosts: [host] }).success,
+      ).toBe(false);
+  });
   test('exact authority and approved Origin; native absence explicitly allowed', () => {
     for (const origin of [undefined, 'https://client.example']) {
       const headers = new Headers({ host: '[::1]:3015' });
@@ -66,6 +114,169 @@ describe('peer trust', () => {
 });
 
 describe('bounded body', () => {
+  test('highly fragmented body attaches only one deadline race', async () => {
+    const maxBodyBytes = 65536;
+    const text = '{"value":0}'.padEnd(maxBodyBytes, ' ');
+    let chunks = 0;
+    let cancelled = 0;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (chunks === text.length) controller.close();
+          else controller.enqueue(Uint8Array.of(text.charCodeAt(chunks++)));
+        },
+        cancel() {
+          cancelled++;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const race = spyOn(Promise, 'race');
+    try {
+      expect(
+        await readBoundedJson(
+          new Request('http://localhost', {
+            method: 'POST',
+            body,
+            duplex: 'half',
+          } as RequestInit),
+          { ...policy, maxBodyBytes },
+          limits,
+        ),
+      ).toEqual({ value: 0 });
+      expect(chunks).toBe(maxBodyBytes);
+      // Per-chunk races retain reactions on the same pending deadline promise.
+      // One lifecycle race bounds these subscriptions independently of fragmentation.
+      expect(race).toHaveBeenCalledTimes(1);
+      expect(body.locked).toBe(false);
+      expect(cancelled).toBe(0);
+    } finally {
+      race.mockRestore();
+    }
+  });
+
+  test('oversized and invalid UTF-8 streams cancel and release their reader', async () => {
+    for (const [bytes, message] of [
+      [new TextEncoder().encode('{} '), 'byte limit'],
+      [Uint8Array.of(0xff), 'Invalid JSON'],
+    ] as const) {
+      let sent = false;
+      let cancelled = 0;
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (!sent) {
+              sent = true;
+              controller.enqueue(bytes);
+            }
+          },
+          cancel() {
+            cancelled++;
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      await expect(
+        readBoundedJson(
+          new Request('http://localhost', {
+            method: 'POST',
+            body,
+            duplex: 'half',
+          } as RequestInit),
+          { ...policy, maxBodyBytes: 2 },
+          limits,
+        ),
+      ).rejects.toThrow(message);
+      expect(cancelled).toBe(1);
+      expect(body.locked).toBe(false);
+    }
+  });
+
+  test('deadline and abort clean listeners and release a reader even if cancellation stalls', async () => {
+    for (const abort of [false, true]) {
+      let cancelled = 0;
+      const controller = new AbortController();
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelled++;
+          return new Promise<void>(() => {});
+        },
+      });
+      const input = new Request('http://localhost', {
+        method: 'POST',
+        body,
+        duplex: 'half',
+        signal: controller.signal,
+      } as RequestInit);
+      const removeListener = spyOn(input.signal, 'removeEventListener');
+      try {
+        const pending = readBoundedJson(
+          input,
+          { ...policy, bodyTimeoutMs: 15 },
+          limits,
+        );
+        if (abort) controller.abort();
+        await expect(pending).rejects.toThrow(abort ? 'aborted' : 'deadline');
+        expect(cancelled).toBe(1);
+        expect(body.locked).toBe(false);
+        expect(removeListener).toHaveBeenCalledTimes(1);
+      } finally {
+        removeListener.mockRestore();
+      }
+    }
+  });
+
+  test('reader errors release the lock and aborted input cannot continue pulling', async () => {
+    const failed = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(new Error('Synthetic read failure'));
+      },
+    });
+    await expect(
+      readBoundedJson(
+        new Request('http://localhost', {
+          method: 'POST',
+          body: failed,
+          duplex: 'half',
+        } as RequestInit),
+        policy,
+        limits,
+      ),
+    ).rejects.toThrow('Invalid JSON');
+    expect(failed.locked).toBe(false);
+    let pulls = 0;
+    let cancelled = 0;
+    const controller = new AbortController();
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull() {
+          pulls++;
+          controller.abort();
+        },
+        cancel() {
+          cancelled++;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    await expect(
+      readBoundedJson(
+        new Request('http://localhost', {
+          method: 'POST',
+          body,
+          duplex: 'half',
+          signal: controller.signal,
+        } as RequestInit),
+        policy,
+        limits,
+      ),
+    ).rejects.toThrow('aborted');
+    expect(pulls).toBe(1);
+    expect(cancelled).toBe(1);
+    expect(body.locked).toBe(false);
+    await Promise.resolve();
+    expect(pulls).toBe(1);
+  });
   test('exact UTF-8 byte cap and cap+1, independent of Content-Length', async () => {
     const text = '{"value":"é"}';
     const maxBodyBytes = new TextEncoder().encode(text).byteLength;

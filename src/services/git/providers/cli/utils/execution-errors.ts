@@ -12,6 +12,7 @@ export type GitExecutionFailure =
   | 'INVALID_EXECUTION_OPTIONS'
   | 'OUTPUT_LIMIT'
   | 'INVALID_OUTPUT_ENCODING'
+  | 'INVALID_OUTPUT_FORMAT'
   | 'CANCELLED'
   | 'DEADLINE'
   | 'SIGNAL_EXIT'
@@ -35,7 +36,8 @@ export class GitExecutionError extends McpError {
             : reason === 'INVALID_EXECUTION_OPTIONS'
               ? JsonRpcErrorCode.ConfigurationError
               : reason === 'OUTPUT_LIMIT' ||
-                  reason === 'INVALID_OUTPUT_ENCODING'
+                  reason === 'INVALID_OUTPUT_ENCODING' ||
+                  reason === 'INVALID_OUTPUT_FORMAT'
                 ? JsonRpcErrorCode.InvalidRequest
                 : JsonRpcErrorCode.InternalError,
       message,

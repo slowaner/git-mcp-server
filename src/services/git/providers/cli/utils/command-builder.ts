@@ -197,6 +197,7 @@ const SAFE_GIT_OPTIONS = new Set([
   '--bare',
   '--mirror',
   '--recurse-submodules',
+  '--no-recurse-submodules',
   // Fetch/push/pull flags
   '--prune',
   '--tags',
@@ -254,6 +255,19 @@ const SAFE_GIT_OPTIONS = new Set([
 const SHORT_FLAG_WITH_VALUE = /^-(?:n\d+|L\d+,\d*)$/;
 
 export function validateGitArgs(args: string[]): void {
+  // The qualified combined untracked producer is a complete private tuple,
+  // never generic permission for numstat/patch flags or arbitrary no-index argv.
+  const combinedUntracked =
+    args.length === 8 &&
+    args[0] === 'diff' &&
+    args[1] === '--no-index' &&
+    args[2] === '--numstat' &&
+    args[3] === '-z' &&
+    args[4] === '--patch' &&
+    args[5] === '--' &&
+    args[6] === '/dev/null' &&
+    !!args[7] &&
+    !args[7].startsWith('-');
   for (const arg of args) {
     if (arg.includes('\0')) {
       throw new Error(`Null byte detected in git argument: ${arg}`);
@@ -265,7 +279,9 @@ export function validateGitArgs(args: string[]): void {
 
     const flagName = arg.split('=')[0] || arg;
     const isShortFlag = SHORT_FLAG_WITH_VALUE.test(arg);
-    const isSafeOption = SAFE_GIT_OPTIONS.has(flagName);
+    const isSafeOption =
+      SAFE_GIT_OPTIONS.has(flagName) ||
+      (combinedUntracked && (arg === '--numstat' || arg === '--patch'));
 
     if (!isShortFlag && !isSafeOption) {
       throw new Error(
