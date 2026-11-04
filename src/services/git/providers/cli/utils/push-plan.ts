@@ -14,6 +14,8 @@ export interface PushConfiguration {
   configuredRefspecs?: readonly string[];
   pushDefault?: string;
   upstreamDestination?: string;
+  /** Undefined means no tracking-remote relationship was established. */
+  pushRemoteMatchesTracking?: boolean;
   mirror?: boolean;
   tagRefs?: readonly string[];
 }
@@ -107,7 +109,10 @@ export function resolvePushPlan(
         throw new Error('Detached push requires an explicit destination');
       const current = normalizePushRef(config.currentBranch);
       const mode = config.pushDefault ?? 'simple';
-      if (mode === 'current')
+      if (
+        mode === 'current' ||
+        (mode === 'simple' && config.pushRemoteMatchesTracking === false)
+      )
         plans.push({
           source: current,
           destination: current,

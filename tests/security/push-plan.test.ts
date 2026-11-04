@@ -9,6 +9,57 @@ import {
 } from '@/services/git/providers/cli/utils/push-plan.js';
 
 describe('concrete push destinations', () => {
+  it('uses the same-named destination only for proved triangular simple pushes', () => {
+    const config = { currentBranch: 'feature', pushDefault: 'simple' };
+    expect(
+      resolvePushPlan({}, { ...config, pushRemoteMatchesTracking: false }),
+    ).toEqual([
+      {
+        source: 'refs/heads/feature',
+        destination: 'refs/heads/feature',
+        force: false,
+        delete: false,
+      },
+    ]);
+    for (const relationship of [undefined, true])
+      expect(() =>
+        resolvePushPlan(
+          {},
+          {
+            ...config,
+            ...(relationship === undefined
+              ? {}
+              : { pushRemoteMatchesTracking: relationship }),
+          },
+        ),
+      ).toThrow(/upstream/);
+    expect(() =>
+      resolvePushPlan(
+        {},
+        {
+          ...config,
+          pushRemoteMatchesTracking: true,
+          upstreamDestination: 'refs/heads/main',
+        },
+      ),
+    ).toThrow(/differs/);
+    expect(() =>
+      resolvePushPlan(
+        {},
+        {
+          ...config,
+          pushDefault: 'upstream',
+          pushRemoteMatchesTracking: false,
+        },
+      ),
+    ).toThrow(/upstream/);
+    expect(() =>
+      resolvePushPlan(
+        { forceWithLease: true },
+        { ...config, pushRemoteMatchesTracking: false },
+      ),
+    ).toThrow(/confirmation/);
+  });
   it('distinguishes only a proved explicit empty tag set from an invalid empty plan', () => {
     expect(
       resolvePrivatePushPlan(

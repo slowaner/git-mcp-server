@@ -170,6 +170,41 @@ describe('validateGitArgs allow-list covers every flag the operations emit', () 
         ])
           expect(() => validateGitArgs(invalid)).toThrow(/Unsafe git flag/i);
       });
+    } else if (flag === '--no-show-signature') {
+      it(`accepts ${flag} only with the identity-history prefix`, () => {
+        expect(files.length).toBeGreaterThan(0);
+        for (const file of files)
+          expect(file).toBe('operations/commits/log.ts');
+        const prefix = ['log', '--no-show-signature', '--format=%H'];
+        for (const valid of [
+          prefix,
+          [...prefix, '-n10'],
+          [
+            ...prefix,
+            '-n10',
+            '--skip=2',
+            '--since=2026-01-01',
+            '--until=2026-02-01',
+            '--author=Example',
+            '--grep=subject',
+            '--end-of-options',
+            'refs/heads/feature',
+            '--',
+            ':(literal)-file.txt',
+          ],
+        ])
+          expect(() => validateGitArgs(valid)).not.toThrow();
+        for (const invalid of [
+          [flag],
+          ['show', ...prefix.slice(1)],
+          ['log', '--format=%H', flag],
+          ['log', flag, '-n10'],
+          ['log', flag, '--format=%B', '-n10'],
+          ['log', `${flag}=true`, '--format=%H', '-n10'],
+          [...prefix, `${flag}=false`],
+        ])
+          expect(() => validateGitArgs(invalid)).toThrow(/Unsafe git flag/i);
+      });
     } else {
       it(`accepts ${flag} (${[...new Set(files)].join(', ')})`, () => {
         expect(() => validateGitArgs([flag])).not.toThrow();

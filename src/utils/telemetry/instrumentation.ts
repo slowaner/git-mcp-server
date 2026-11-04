@@ -87,7 +87,7 @@ if (config.openTelemetry.enabled && !isOtelInitialized) {
       autoDetectResources: false,
       views: safeMetricViews(),
       spanProcessors,
-      ...(metricReader && { metricReader }),
+      metricReaders: metricReader ? [metricReader] : [],
       sampler: new TraceIdRatioBasedSampler(config.openTelemetry.samplingRatio),
       instrumentations: [
         getNodeAutoInstrumentations({

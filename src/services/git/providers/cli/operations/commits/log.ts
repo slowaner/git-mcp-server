@@ -32,7 +32,7 @@ export async function executeLog(
     const limit = options.maxCount ?? 100;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
       throw new Error('History requires between 1 and 1000 records');
-    const args = ['log', '--format=%H', `-n${limit}`];
+    const args = ['log', '--no-show-signature', '--format=%H', `-n${limit}`];
     if (options.skip !== undefined) args.push(`--skip=${options.skip}`);
     if (options.since) args.push(`--since=${options.since}`);
     if (options.until) args.push(`--until=${options.until}`);

@@ -4,6 +4,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { executeLog } from '@/services/git/providers/cli/operations/commits/log.js';
+import { validateGitArgs } from '@/services/git/providers/cli/utils/command-builder.js';
 import { commitFixture } from '../../../../../../security/helpers/git-object-fixture.js';
 import type {
   GitLogOptions,
@@ -47,6 +48,22 @@ describe('executeLog', () => {
     objects = [];
     expect(await run()).toEqual({ commits: [], totalCount: 0 });
     expect(calls).toHaveLength(1);
+  });
+  it('admits signature suppression only for the fixed identity-only history producer', async () => {
+    await run({ maxCount: 1 });
+    expect(calls[0]!.slice(0, 4)).toEqual([
+      'log',
+      '--no-show-signature',
+      '--format=%H',
+      '-n1',
+    ]);
+    expect(() => validateGitArgs(calls[0]!)).not.toThrow();
+    expect(() =>
+      validateGitArgs(['show', '--no-show-signature', '--format=%H']),
+    ).toThrow();
+    expect(() =>
+      validateGitArgs(['log', '--no-show-signature', '--format=%s']),
+    ).toThrow();
   });
   it('preserves hash, short hash, author, email, timestamp, subject, body and parents', async () => {
     const result = await run();

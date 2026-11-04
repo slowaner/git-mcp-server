@@ -86,6 +86,9 @@ export async function executePush(
       ...(upstreamRemote === remote && upstream?.[0]
         ? { upstreamDestination: upstream[0] }
         : {}),
+      ...(upstreamRemote
+        ? { pushRemoteMatchesTracking: upstreamRemote === remote }
+        : {}),
       mirror: bool(`remote.${remote}.mirror`),
       ...(tagRefs ? { tagRefs } : {}),
     });
