@@ -138,6 +138,8 @@ export function createHttpApp(
       try {
         await server?.close();
         await transport?.close();
+        sessionReleases.get(sid)?.();
+        sessionReleases.delete(sid);
         if (owner && container.isRegistered(StorageServiceToken)) {
           const storage =
             container.resolve<StorageService>(StorageServiceToken);
@@ -152,8 +154,6 @@ export function createHttpApp(
               ).clear(),
           );
         }
-        sessionReleases.get(sid)?.();
-        sessionReleases.delete(sid);
       } catch {
         logger.warning('HTTP session cleanup failed', transportContext);
       }

@@ -4,6 +4,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { SignJWT } from 'jose';
 import { container } from 'tsyringe';
 import {
@@ -398,6 +399,153 @@ suite('authenticated actual HTTP session and repository isolation', () => {
     expect(identity(two).principal.subject).toBe('bob');
     expect(identity(two).sessionId).toBe(b);
   });
+
+  it.each(['storage', 'server', 'transport'] as const)(
+    'expiry cleanup preserves capacity accounting when %s fails',
+    async (failure) => {
+      const authenticated = app;
+      const security = config.httpSecurity;
+      const staleTimeout = config.mcpStatefulSessionStaleTimeoutMs;
+      const originalDelete = storage.delete.bind(storage);
+      const originalTransportClose =
+        WebStandardStreamableHTTPServerTransport.prototype.close;
+      const created: { server: McpServer; restore: () => void }[] = [];
+      let isolated: ReturnType<typeof createHttpApp> | undefined;
+      let serverClosed = false;
+      let transportClosed = false;
+      let failures = 0;
+      let observeCleanup!: () => void;
+      const cleanupObserved = new Promise<void>((resolve) => {
+        observeCleanup = resolve;
+      });
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const deletions: {
+        serverClosed: boolean;
+        transportClosed: boolean;
+        subject: string | undefined;
+        sessionId: string | undefined;
+      }[] = [];
+      const transportClose = vi
+        .spyOn(WebStandardStreamableHTTPServerTransport.prototype, 'close')
+        .mockImplementation(async function (
+          this: WebStandardStreamableHTTPServerTransport,
+        ) {
+          if (failure === 'transport' && serverClosed && failures === 0) {
+            failures++;
+            observeCleanup();
+            throw new Error('Synthetic transport close failure');
+          }
+          await originalTransportClose.call(this);
+          transportClosed = true;
+        });
+      const deletion = vi
+        .spyOn(storage, 'delete')
+        .mockImplementation(async (key, context) => {
+          deletions.push({
+            serverClosed,
+            transportClosed,
+            subject: context.principal?.subject,
+            sessionId: context.sessionId,
+          });
+          if (failure === 'storage' && failures === 0) {
+            failures++;
+            observeCleanup();
+            throw new Error('Synthetic storage deletion failure');
+          }
+          return originalDelete(key, context);
+        });
+      try {
+        config.httpSecurity = {
+          ...security,
+          maxSessions: 1,
+          maxSessionsPerPrincipal: 1,
+        };
+        config.mcpStatefulSessionStaleTimeoutMs = 100;
+        app = isolated = createHttpApp(async () => {
+          const server = await makeServer();
+          const originalClose = server.close.bind(server);
+          const close = vi
+            .spyOn(server, 'close')
+            .mockImplementation(async () => {
+              if (failure === 'server' && failures === 0) {
+                failures++;
+                observeCleanup();
+                throw new Error('Synthetic server close failure');
+              }
+              await originalClose();
+              serverClosed = true;
+            });
+          created.push({ server, restore: () => close.mockRestore() });
+          return server;
+        }, requestContextService.createRequestContext());
+        const alice = await token();
+        const bob = await token({ sub: 'bob' });
+        const sid = await initialize(alice);
+        for (const auth of [alice, bob]) {
+          const full = await request(auth, undefined, 'POST', init);
+          expect(full.status).toBe(429);
+          await full.text();
+        }
+        await Promise.race([
+          cleanupObserved,
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error('Expiry cleanup was not observed')),
+              1000,
+            );
+          }),
+        ]);
+        clearTimeout(timeout);
+        expect(failures).toBe(1);
+        if (failure === 'storage') {
+          expect(deletions).toEqual([
+            {
+              serverClosed: true,
+              transportClosed: true,
+              subject: 'alice',
+              sessionId: sid,
+            },
+          ]);
+          const replacement = await initialize(alice);
+          expect(replacement).not.toBe(sid);
+          accepted(
+            await call(alice, replacement, 'git_clear_working_dir', {
+              confirm: 'yes',
+            }),
+          );
+          expect(deletions[1]?.sessionId).toBe(replacement);
+          expect(deletions[1]?.subject).toBe('alice');
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const gone = await request(alice, sid, 'DELETE');
+            expect(gone.status).toBe(404);
+            await gone.text();
+          }
+          const foreign = await request(bob, replacement);
+          expect(foreign.status).toBe(404);
+          await foreign.text();
+          const fullAgain = await request(bob, undefined, 'POST', init);
+          expect(fullAgain.status).toBe(429);
+          await fullAgain.text();
+          expect(deletion).toHaveBeenCalledTimes(2);
+        } else {
+          const stillFull = await request(alice, undefined, 'POST', init);
+          expect(stillFull.status).toBe(429);
+          await stillFull.text();
+          expect(deletion).not.toHaveBeenCalled();
+        }
+      } finally {
+        if (timeout) clearTimeout(timeout);
+        if (isolated) await closeHttpApp(isolated);
+        for (const entry of created) entry.restore();
+        transportClose.mockRestore();
+        deletion.mockRestore();
+        for (const entry of created) await entry.server.close();
+        app = authenticated;
+        config.httpSecurity = security;
+        config.mcpStatefulSessionStaleTimeoutMs = staleTimeout;
+      }
+    },
+  );
 
   it('read scope cannot mutate any remote mode; repository config and provider remain untouched', async () => {
     const read = await token({ scope: 'tool:git:read' });

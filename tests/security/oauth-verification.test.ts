@@ -3,7 +3,7 @@
  * @module tests/security/oauth-verification
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { exportJWK, generateKeyPair, SignJWT } from 'jose';
+import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { config } from '@/config/index.js';
 import { logger } from '@/utils/index.js';
 import { OauthStrategy } from '@/mcp-server/transports/auth/strategies/oauthStrategy.js';
@@ -33,8 +33,25 @@ describe('actual OAuth verification policy', () => {
       },
     ]),
   };
+  const invalidClaims = {
+    missingTenant: () => ({ tid: undefined }),
+    missingSubject: () => ({ sub: undefined }),
+    missingClient: () => ({ client_id: undefined }),
+    wrongAudience: () => ({ aud: 'wrong' }),
+    wrongIssuer: () => ({ iss: 'https://foreign.example.test' }),
+    missingExpiry: () => ({ exp: undefined }),
+    missingIat: () => ({ iat: undefined }),
+    overlong: (now: number) => ({ exp: now + 301 }),
+    expired: (now: number) => ({ exp: now - 10 }),
+    future: (now: number) => ({ iat: now + 30 }),
+    ambiguousClient: () => ({ cid: 'foreign' }),
+    emptyScope: () => ({ scope: '' }),
+    badTenant: () => ({ tid: '' }),
+    nonintegerExpiry: (now: number) => ({ exp: now + 120.5 }),
+  };
   async function signed(
-    overrides: Record<string, unknown> = {},
+    overrides:
+      Record<string, unknown> | ((now: number) => Record<string, unknown>) = {},
     key = pair.privateKey,
   ) {
     const now = Math.floor(Date.now() / 1000);
@@ -47,7 +64,7 @@ describe('actual OAuth verification policy', () => {
       scope: 'tool:git:read',
       iat: now,
       exp: now + 120,
-      ...overrides,
+      ...(typeof overrides === 'function' ? overrides(now) : overrides),
     })
       .setProtectedHeader({ alg: 'RS256', kid: 'fixture' })
       .sign(key);
@@ -81,25 +98,20 @@ describe('actual OAuth verification policy', () => {
     expect(result.expiresAt).toBeGreaterThan(Date.now() / 1000);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
-  for (const [name, overrides] of Object.entries({
-    missingTenant: { tid: undefined },
-    missingSubject: { sub: undefined },
-    missingClient: { client_id: undefined },
-    wrongAudience: { aud: 'wrong' },
-    wrongIssuer: { iss: 'https://foreign.example.test' },
-    missingExpiry: { exp: undefined },
-    missingIat: { iat: undefined },
-    overlong: { exp: Math.floor(Date.now() / 1000) + 301 },
-    expired: { exp: Math.floor(Date.now() / 1000) - 10 },
-    future: { iat: Math.floor(Date.now() / 1000) + 30 },
-    ambiguousClient: { cid: 'foreign' },
-    emptyScope: { scope: '' },
-    badTenant: { tid: '' },
-    nonintegerExpiry: { exp: Date.now() / 1000 + 120 },
-  }))
+  for (const [name, overrides] of Object.entries(invalidClaims))
     it(`rejects ${name}`, async () => {
       await expect(strategy.verify(await signed(overrides))).rejects.toThrow();
     });
+  it('keeps invalid lifetimes invalid after delayed fixture setup', async () => {
+    const deferred = [invalidClaims.overlong, invalidClaims.future];
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    for (const [index, overrides] of deferred.entries()) {
+      const encoded = await signed(overrides);
+      const payload = decodeJwt(encoded);
+      expect(payload.exp! - payload.iat!).toBe(index === 0 ? 301 : 90);
+      await expect(strategy.verify(encoded)).rejects.toThrow();
+    }
+  });
   it('rejects a wrong RSA key and symmetric-algorithm substitution', async () => {
     const foreign = await generateKeyPair('RS256');
     await expect(
