@@ -237,9 +237,16 @@ export async function authorizeGitCommand(
     if (files.length !== 2 || files[0] !== '/dev/null') deny();
     authorizeFile(files[1]!);
   } else if (
-    ['add', 'reset', 'clean', 'checkout', 'diff', 'blame', 'log'].includes(
-      command ?? '',
-    )
+    [
+      'add',
+      'reset',
+      'clean',
+      'checkout',
+      'diff',
+      'blame',
+      'log',
+      'show',
+    ].includes(command ?? '')
   ) {
     const separator = args.indexOf('--');
     if (separator >= 0)

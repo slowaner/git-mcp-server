@@ -107,7 +107,7 @@ const OutputSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Populated when an explicit signing attempt failed and creation was retried using native Git configuration. The retry may still produce a signature.',
+      'Legacy compatibility field. Creation runs once and never retries unsigned; current implementations omit this field.',
     ),
   verifiedTag: z
     .string()
@@ -121,11 +121,21 @@ const OutputSchema = z.object({
     .describe(
       'Whether the signature validated (for verify mode). `false` for unsigned tags, missing trust config, bad signatures, or unparseable output — inspect `warning` to distinguish.',
     ),
+  cryptographicallyValid: z
+    .boolean()
+    .optional()
+    .describe(
+      'Positive cryptographic evidence, separate from verifier acceptance.',
+    ),
+  trust: z
+    .enum(['trusted', 'untrusted', 'unknown'])
+    .optional()
+    .describe('Configured native verifier trust, never host authorization.'),
   signatureType: z
     .enum(['gpg', 'ssh', 'x509'])
     .optional()
     .describe(
-      'Signature algorithm family when detectable from `git tag -v` output (verify mode). Absent for unsigned tags or unparseable output.',
+      'Signature family from the validated stored tag object (verify mode).',
     ),
   signerIdentity: z
     .string()
@@ -228,6 +238,9 @@ async function gitTagLogic(
   if (result.signatureType !== undefined) {
     output.signatureType = result.signatureType;
   }
+  if (result.cryptographicallyValid !== undefined)
+    output.cryptographicallyValid = result.cryptographicallyValid;
+  if (result.trust !== undefined) output.trust = result.trust;
   if (result.signerIdentity !== undefined) {
     output.signerIdentity = result.signerIdentity;
   }
@@ -265,6 +278,10 @@ function filterGitTagOutput(
       ...(result.signed !== undefined && { signed: result.signed }),
       ...(result.signingWarning && { signingWarning: result.signingWarning }),
       ...(result.verified !== undefined && { verified: result.verified }),
+      ...(result.cryptographicallyValid !== undefined && {
+        cryptographicallyValid: result.cryptographicallyValid,
+      }),
+      ...(result.trust !== undefined && { trust: result.trust }),
       ...(result.warning && { warning: result.warning }),
     };
   }
