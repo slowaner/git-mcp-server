@@ -66,7 +66,7 @@ type Colors = typeof c;
 type RunMode = 'check' | 'fix';
 type UIMode = 'Checking' | 'Fixing';
 
-interface AppContext {
+export interface AppContext {
   flags: Set<string>;
   noFix: boolean;
   isHuskyHook: boolean;
@@ -87,7 +87,7 @@ interface CommandResult {
 /** Represents the raw result from a shell execution. */
 type ShellResult = Omit<CommandResult, 'checkName' | 'duration' | 'skipped'>;
 
-interface Check {
+export interface Check {
   name: string;
   /** The flag to skip this check (e.g., '--no-lint'). */
   flag: string;
@@ -210,7 +210,8 @@ const getTargets = (
   return [defaultTarget];
 };
 
-const ALL_CHECKS: Check[] = [
+/** Registered development gates; exported for offline execution-contract tests. */
+export const ALL_CHECKS: Check[] = [
   {
     name: 'ESLint',
     flag: '--no-lint',
@@ -219,7 +220,13 @@ const ALL_CHECKS: Check[] = [
       const targets = getTargets(ctx, LINT_EXTS, '.');
       if (targets.length === 0) return null;
 
-      const command = ['bunx', 'eslint', ...targets, '--max-warnings', '0'];
+      const command = [
+        process.execPath,
+        path.join(ROOT_DIR, 'node_modules/eslint/bin/eslint.js'),
+        ...targets,
+        '--max-warnings',
+        '0',
+      ];
       if (mode === 'fix') {
         command.push('--fix');
       }
@@ -233,7 +240,11 @@ const ALL_CHECKS: Check[] = [
     flag: '--no-types',
     canFix: false,
     // TypeScript generally needs the whole project context for accurate checking.
-    getCommand: () => ['bunx', 'tsc', '--noEmit'],
+    getCommand: () => [
+      process.execPath,
+      path.join(ROOT_DIR, 'node_modules/typescript/bin/tsc'),
+      '--noEmit',
+    ],
     tip: () => 'Check TypeScript errors in your IDE or the console output.',
   },
   {
@@ -245,7 +256,10 @@ const ALL_CHECKS: Check[] = [
       const targets = getTargets(ctx, FORMAT_EXTS, '.');
       if (targets.length === 0) return null;
 
-      const command = ['bunx', 'prettier'];
+      const command = [
+        process.execPath,
+        path.join(ROOT_DIR, 'node_modules/prettier/bin/prettier.cjs'),
+      ];
       if (mode === 'fix') {
         command.push('--write');
       } else {
@@ -286,26 +300,15 @@ const ALL_CHECKS: Check[] = [
   {
     name: 'Security Audit',
     flag: '--no-audit',
-    canFix: false, // 'bun audit --fix' exists but often requires manual review.
-    getCommand: () => ['bun', 'audit'],
-    isSuccess: (result, _mode) => {
-      // If the command exits 0, no vulnerabilities were found.
-      if (result.exitCode === 0) return true;
-
-      // 'bun audit' exits with 1 if vulnerabilities are found. We need to check the output.
-      const output = result.stdout;
-
-      // If no vulnerabilities are found, it's a success (defensive check).
-      if (output.includes('0 vulnerabilities found')) return true;
-
-      // Fail only if 'high' or 'critical' vulnerabilities are mentioned.
-      const hasHighOrCritical = /high|critical/i.test(output);
-
-      // If it doesn't have high or critical vulnerabilities, we consider it a success.
-      return !hasHighOrCritical;
-    },
+    canFix: false,
+    // The dedicated gate validates JSON, process completion, runtime and lock
+    // identity. No generic success predicate may rewrite its failure status.
+    getCommand: () => [
+      process.execPath,
+      path.join(ROOT_DIR, 'scripts/security-audit.ts'),
+    ],
     tip: (c) =>
-      `High- or critical-severity vulnerabilities found. Review the report and run ${c.bold('bun update')} or ${c.bold('bun audit --fix')}.`,
+      `Audit blocked: inspect structured findings or execution errors. Update and review affected dependencies before rerunning ${c.bold('bun scripts/security-audit.ts')}.`,
   },
   {
     name: 'Tracked Secrets',
@@ -328,7 +331,7 @@ const ALL_CHECKS: Check[] = [
     name: 'Dependencies (Outdated)',
     flag: '--no-deps',
     canFix: false,
-    getCommand: () => ['bun', 'outdated'],
+    getCommand: () => [process.execPath, 'outdated'],
     isSuccess: (result, _mode) => {
       // `bun outdated` exits with 0 if no packages are outdated, which is a success.
       if (result.exitCode === 0 && result.stdout.trim() === '') {
@@ -527,7 +530,12 @@ function parseArgs(
   return { flags, noFix, isHuskyHook };
 }
 
-async function runCheck(check: Check, ctx: AppContext): Promise<CommandResult> {
+/** Execute one gate, preserving failures unless its documented predicate permits them. */
+export async function runCheck(
+  check: Check,
+  ctx: AppContext,
+  execute = Shell.exec,
+): Promise<CommandResult> {
   const { name, getCommand, isSuccess } = check;
   const baseResult: CommandResult = {
     checkName: name,
@@ -561,7 +569,7 @@ async function runCheck(check: Check, ctx: AppContext): Promise<CommandResult> {
 
   // 4. Execute the command
   const startTime = Date.now();
-  const result = await Shell.exec(command, { cwd: ctx.rootDir });
+  const result = await execute(command, { cwd: ctx.rootDir });
   const duration = Date.now() - startTime;
 
   const finalResult = { ...baseResult, ...result, duration };
@@ -719,8 +727,9 @@ async function main() {
   process.exit(overallSuccess ? 0 : 1);
 }
 
-// Entry point
-main().catch((error) => {
-  UI.printError(error);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    UI.printError(error);
+    process.exit(1);
+  });
+}

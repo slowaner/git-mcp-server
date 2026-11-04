@@ -1,0 +1,154 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'fix/security-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-bun-pinned
+      - name: Audit exact lock with High/Critical policy
+        run: bun scripts/security-audit.ts
+
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-bun-pinned
+      - name: Verify Gitleaks 8.30.1 archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --location --proto '=https' --tlsv1.2 \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output "$RUNNER_TEMP/gitleaks.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check --strict
+          mkdir "$RUNNER_TEMP/reviewed-gitleaks"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP/reviewed-gitleaks" gitleaks
+          test "$("$RUNNER_TEMP/reviewed-gitleaks/gitleaks" version)" = '8.30.1'
+          sha256sum "$RUNNER_TEMP/reviewed-gitleaks/gitleaks"
+          echo 'e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf  scripts/security/gitleaks.toml' | sha256sum --check --strict
+          test "$(wc -c < scripts/security/gitleaks.toml)" -eq 97731
+          test "$(git hash-object scripts/security/gitleaks.toml)" = '256f64790ea6d954f0041024be2938089ae1e7a7'
+          touch "$RUNNER_TEMP/empty-gitleaks.ignore"
+          echo "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  $RUNNER_TEMP/empty-gitleaks.ignore" | sha256sum --check --strict
+          echo "$RUNNER_TEMP/reviewed-gitleaks" >> "$GITHUB_PATH"
+      - name: Scan exact current tree without exceptions
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "${GITLEAKS_CONFIG+x}${GITLEAKS_CONFIG_TOML+x}"
+          test -z "$(git status --porcelain)"
+          test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
+          mkdir "$RUNNER_TEMP/current-tree"
+          git checkout-index --all --prefix="$RUNNER_TEMP/current-tree/"
+          test ! -e "$RUNNER_TEMP/current-tree/.gitleaks.toml"
+          while IFS= read -r -d '' path; do
+            target="$(realpath -- "$path")"
+            case "$target" in
+              "$RUNNER_TEMP/current-tree/"*) ;;
+              *) echo 'Source symlink escapes snapshot'; exit 1 ;;
+            esac
+            test -f "$target"
+            readlink -- "$path" | "$RUNNER_TEMP/reviewed-gitleaks/gitleaks" stdin --config "$GITHUB_WORKSPACE/scripts/security/gitleaks.toml" --redact=100 --no-banner --ignore-gitleaks-allow --gitleaks-ignore-path "$RUNNER_TEMP/empty-gitleaks.ignore" --log-level error --timeout 180 2> "$RUNNER_TEMP/symlink-scan.stderr"
+            test ! -s "$RUNNER_TEMP/symlink-scan.stderr"
+          done < <(find "$RUNNER_TEMP/current-tree" -type l -print0)
+          "$RUNNER_TEMP/reviewed-gitleaks/gitleaks" dir --config "$GITHUB_WORKSPACE/scripts/security/gitleaks.toml" --follow-symlinks --redact=100 --no-banner --ignore-gitleaks-allow --gitleaks-ignore-path "$RUNNER_TEMP/empty-gitleaks.ignore" --log-level error --report-format json --report-path "$RUNNER_TEMP/current-tree.json" --timeout 180 "$RUNNER_TEMP/current-tree" 2> "$RUNNER_TEMP/current-tree.stderr"
+          test ! -s "$RUNNER_TEMP/current-tree.stderr"
+          jq -e 'type == "array" and length == 0' "$RUNNER_TEMP/current-tree.json"
+      - name: Scan full reachable history with exact assessed fixture disposition
+        run: bun scripts/check-secret-history.ts --head "${{ github.sha }}" --archive "$RUNNER_TEMP/gitleaks.tar.gz"
+      - name: Require zero findings in every actual outgoing signed commit metadata object
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir "$RUNNER_TEMP/outgoing-metadata"
+          git rev-list "1f3f0560606ad02b46cd9f0bd215e2b941e9c7c5..$GITHUB_SHA" > "$RUNNER_TEMP/outgoing-commits"
+          test -s "$RUNNER_TEMP/outgoing-commits"
+          while IFS= read -r commit; do
+            git cat-file commit "$commit" > "$RUNNER_TEMP/outgoing-metadata/$commit.commit"
+          done < "$RUNNER_TEMP/outgoing-commits"
+          "$RUNNER_TEMP/reviewed-gitleaks/gitleaks" dir --config "$GITHUB_WORKSPACE/scripts/security/gitleaks.toml" --redact=100 --no-banner --ignore-gitleaks-allow --gitleaks-ignore-path "$RUNNER_TEMP/empty-gitleaks.ignore" --log-level error --report-format json --report-path "$RUNNER_TEMP/metadata.json" --timeout 180 "$RUNNER_TEMP/outgoing-metadata" 2> "$RUNNER_TEMP/metadata.stderr"
+          test ! -s "$RUNNER_TEMP/metadata.stderr"
+          jq -e 'type == "array" and length == 0' "$RUNNER_TEMP/metadata.json"
+      - name: Install locked test dependencies without lifecycle scripts
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Verify actual release preparation without registry writes
+        run: bun test tests/scripts/security/release-bundle.integration.test.ts
+
+  security-regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-bun-pinned
+      - name: Install exact locked dependencies without lifecycle scripts
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Require and record native security oracle profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in git gpg gpgconf gpgsm openssl ssh-keygen; do
+            binary="$(command -v "$tool")"
+            test -n "$binary"
+            sha256sum "$binary"
+          done
+          uname -a
+          git --version
+          gpg --version
+          gpgconf --version
+          gpgsm --version
+          openssl version -a
+          ssh -V
+      - name: Qualify native Linux filename bytes through production SDK failure handling
+        run: bun scripts/security/linux-filename-profile.ts
+      - name: Security regression tests
+        run: bun test tests/security tests/scripts/security
+
+  codeql:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-bun-pinned
+      - name: Verify CodeQL 2.27.4 bundle including query packs
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --location --proto '=https' --tlsv1.2 \
+            https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.4/codeql-bundle-linux64.tar.gz \
+            --output "$RUNNER_TEMP/codeql-bundle.tar.gz"
+          echo "89ed56c8ec6bfccef6a0d2e7fe86da0469ca24b4db08b88016ec134b942c17a4  $RUNNER_TEMP/codeql-bundle.tar.gz" | sha256sum --check --strict
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          tools: ${{ runner.temp }}/codeql-bundle.tar.gz
+          config-file: ./.github/codeql/security-config.yml
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
+        with:
+          output: ${{ runner.temp }}/codeql-results
+          upload: never
+          upload-database: false
+      - name: Require complete analysis and enforce High/Critical results
+        run: bun scripts/check-sarif.ts "${{ runner.temp }}/codeql-results/javascript.sarif"
