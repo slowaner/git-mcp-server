@@ -38,6 +38,42 @@ export async function executeGitCommand(
   cwd: string,
   options: ExecuteGitOptions = {},
 ): Promise<GitCommandResult> {
+  return withAuthorizedGitCommand(args, cwd, options, (execute) => execute());
+}
+
+/**
+ * Authorize only the fixed empty, explicitly selected tag-push intent. No push
+ * process, transport hook or network operation is started after authorization.
+ * The caller must independently prove that its explicit local tag set is empty.
+ */
+export async function authorizeEmptyTagPushDestination(
+  remote: string,
+  cwd: string,
+  options: ExecuteGitOptions = {},
+): Promise<void> {
+  return withAuthorizedGitCommand(
+    ['push', '--tags', '--', remote],
+    cwd,
+    options,
+    async () => {},
+    () => {
+      if (!remote || remote.startsWith('-') || /[\x00-\x20\x7f]/.test(remote))
+        throw new McpError(
+          JsonRpcErrorCode.InvalidRequest,
+          'Invalid effective push remote.',
+        );
+    },
+  );
+}
+
+/** One private preflight and lifetime for both fixed intent and native execution. */
+async function withAuthorizedGitCommand<T>(
+  args: string[],
+  cwd: string,
+  options: ExecuteGitOptions,
+  complete: (execute: () => Promise<GitCommandResult>) => Promise<T>,
+  validateIntent?: () => void,
+): Promise<T> {
   // Must precede cwd stat, repository discovery and every Git invocation.
   const policy = assertConfiguredGitExecutionPolicy();
   const failure = getGitExecutionFailure();
@@ -48,6 +84,7 @@ export async function executeGitCommand(
       try {
         args = disableSubmoduleRecursion(args);
         validateGitArgs(args);
+        validateIntent?.();
         const roots = getConfiguredRepositoryPolicy(options.repositoryRoots);
         cwd = roots.resolve(cwd).path;
         const env = buildGitEnv(process.env, policy);
@@ -89,14 +126,16 @@ export async function executeGitCommand(
           );
         }
         cwd = await authorizeGitCommand(roots, args, cwd, introspect);
-        return await spawnGitCommand(
-          args,
-          cwd,
-          env,
-          undefined,
-          options.signal,
-          options.allowNonZeroExit,
-          { policy, deadline: options.deadline },
+        return await complete(() =>
+          spawnGitCommand(
+            args,
+            cwd,
+            env,
+            undefined,
+            options.signal,
+            options.allowNonZeroExit,
+            { policy, deadline: options.deadline },
+          ),
         );
       } catch (error) {
         if (

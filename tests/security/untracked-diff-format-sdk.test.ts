@@ -244,7 +244,7 @@ describe(
             executeDiff({ includeUntracked: true }, context(), async (args) => {
               callsToProducer++;
               if (args[0] === 'ls-files')
-                return { stdout: 'new.txt\n', stderr: '' };
+                return { stdout: 'new.txt\0', stderr: '' };
               if (!args.includes('--no-index'))
                 return { stdout: '', stderr: '' };
               // Invalid status must be rejected before touching even the payload.
@@ -285,7 +285,7 @@ describe(
           context(),
           async (args, _cwd, _ctx, options) => {
             if (args[0] === 'ls-files')
-              return { stdout: 'new.txt\n', stderr: '' };
+              return { stdout: 'new.txt\0', stderr: '' };
             if (!args.includes('--no-index')) {
               assert.equal(options, undefined);
               return { stdout: '', stderr: '' };

@@ -26,11 +26,13 @@ export function loadConfig(): AppConfig | null {
 /**
  * Whether to explicitly request signing for commits, tags, merges, rebases,
  * cherry-picks, and pulls. False leaves native Git signing configuration in
- * control; it does not disable signing. Commit/tag creation alone retries a
- * failed explicit request without the signing flag. Results report actual
- * signature presence and expose the retry through `signingWarning`.
- * Returns false if config is unavailable.
+ * control; it does not disable signing. Commit/tag creation never retries a
+ * failed creation. Results report signature presence separately from trust.
+ * Unavailable policy fails closed instead of silently disabling the request.
  */
 export function shouldSignCommits(): boolean {
-  return loadConfig()?.git?.signCommits ?? false;
+  const policy = loadConfig()?.git?.signCommits;
+  if (typeof policy !== 'boolean')
+    throw new Error('Signing policy unavailable');
+  return policy;
 }

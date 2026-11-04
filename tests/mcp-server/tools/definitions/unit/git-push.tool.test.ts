@@ -197,6 +197,7 @@ describe('git_push tool', () => {
         force: true,
         tags: true,
         remoteBranch: 'main',
+        confirmed: true,
       });
       const appContext = createTestContext({ tenantId: 'test-tenant' });
       const sdkContext = createTestSdkContext();
@@ -208,6 +209,37 @@ describe('git_push tool', () => {
       expect(options.tags).toBe(true);
       expect(options.remoteBranch).toBe('main');
     });
+  });
+
+  describe('destructive destination policy', () => {
+    for (const destructive of [
+      { force: true },
+      { forceWithLease: true },
+      { delete: true },
+    ]) {
+      it(
+        'denies unconfirmed ' +
+          JSON.stringify(destructive) +
+          ' before provider access',
+        async () => {
+          const input = gitPushTool.inputSchema.parse({
+            path: '.',
+            branch: 'feature',
+            remoteBranch: 'refs/heads/main',
+            ...destructive,
+          });
+          await expect(
+            gitPushTool.logic(
+              input,
+              createTestContext({ tenantId: 'test-tenant' }),
+              createTestSdkContext(),
+            ),
+          ).rejects.toThrow(/confirmation/);
+          expect(mockProvider.push).not.toHaveBeenCalled();
+          expect(mockProvider.status).not.toHaveBeenCalled();
+        },
+      );
+    }
   });
 
   describe('Response Formatter', () => {

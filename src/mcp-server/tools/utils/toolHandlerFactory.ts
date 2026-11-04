@@ -7,6 +7,11 @@
  */
 import { container } from 'tsyringe';
 import {
+  assertStructuredOutputBudget,
+  MAX_STRUCTURED_RESPONSE_BYTES,
+} from './structured-output-budget.js';
+import { safeAuditRecord } from '@/utils/internal/safe-audit.js';
+import {
   repositoryRootsFromContext,
   withRepositoryRoots,
 } from '@/services/git/core/configured-repository-policy.js';
@@ -160,13 +165,7 @@ export function createMcpToolHandler<
       // Log without context since we don't have a RequestContext yet
       // Only log to console if TTY to avoid polluting stderr in STDIO mode
       if (process.stderr?.isTTY) {
-        console.warn(
-          `[${toolName}] Invalid SDK context received from MCP framework:`,
-          {
-            contextType: typeof extra,
-            hasContext: !!extra,
-          },
-        );
+        console.warn('Invalid SDK context received from MCP framework.');
       }
       // Continue anyway - MCP SDK controls this, so we trust it
     }
@@ -183,34 +182,34 @@ export function createMcpToolHandler<
     const appContext = requestContextService.createRequestContext({
       parentContext: sdkContext,
       operation: 'HandleToolRequest',
-      additionalContext: { toolName, sessionId, input },
+      additionalContext: { toolName, sessionId },
     });
 
     try {
       const result = await measureToolExecution(
         // Pass both the app's internal context and the full SDK context to the logic.
         () =>
-          withConfiguredGitExecutionContext(sdkContext?.signal, () =>
-            logic(input, appContext, sdkContext),
-          ),
+          withConfiguredGitExecutionContext(sdkContext?.signal, async () => {
+            const value = await logic(input, appContext, sdkContext);
+            assertStructuredOutputBudget(value, MAX_STRUCTURED_RESPONSE_BYTES);
+            return value;
+          }),
         { ...appContext, toolName },
         input,
       );
 
-      return {
+      const response = {
         structuredContent: result,
         content: responseFormatter(result),
       };
+      assertStructuredOutputBudget(response, MAX_STRUCTURED_RESPONSE_BYTES);
+      return response;
     } catch (error) {
       // Enhanced error context logging
-      logger.error('Tool execution failed', {
-        ...appContext,
-        toolName,
-        error: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack : undefined,
-        inputKeys:
-          typeof input === 'object' && input !== null ? Object.keys(input) : [],
-      });
+      logger.error(
+        'Tool execution failed',
+        safeAuditRecord('exception', appContext, error),
+      );
 
       const mcpError = ErrorHandler.handleError(error, {
         operation: `tool:${toolName}`,
@@ -391,12 +390,10 @@ export function createToolHandler<TInput, TOutput>(
         };
 
         if (appContext) {
-          logger.debug('Initialized tool handler dependencies', {
-            ...appContext,
-            hasStorage: !!deps.storage,
-            hasFactory: !!deps.factory,
-            skipPathResolution: options.skipPathResolution,
-          });
+          logger.debug(
+            'Initialized tool handler dependencies',
+            safeAuditRecord('operation', appContext),
+          );
         }
       }
       return deps;
@@ -413,25 +410,10 @@ export function createToolHandler<TInput, TOutput>(
     // Resolve dependencies using lazy singleton (passing context for initialization logging)
     const { storage, factory } = getDependencies(appContext);
 
-    // Debug mode: log input details if enabled
-    // Performance optimization: only stringify input in verbose mode to avoid overhead
-    if (process.env.MCP_DEBUG_TOOL_INPUTS === 'true') {
-      const verboseMode = process.env.MCP_DEBUG_VERBOSE === 'true';
-      logger.debug('Tool input received', {
-        ...appContext,
-        input: verboseMode
-          ? JSON.stringify(input, null, 2)
-          : '<omitted - set MCP_DEBUG_VERBOSE=true to include>',
-        inputType: typeof input,
-        inputKeys: typeof input === 'object' && input ? Object.keys(input) : [],
-      });
-    }
-
-    logger.debug('Executing tool with handler factory', {
-      ...appContext,
-      toolInput: input,
-      skipPathResolution: options.skipPathResolution,
-    });
+    logger.debug(
+      'Executing tool with handler factory',
+      safeAuditRecord('operation', appContext),
+    );
 
     // Get the provider (factory caches the instance, so this is fast)
     const provider = await factory.getProvider();
@@ -458,25 +440,19 @@ export function createToolHandler<TInput, TOutput>(
           storage,
         );
 
-        logger.debug('Resolved working directory', {
-          ...appContext,
-          inputPath: pathValue,
-          resolvedPath: targetPath,
-        });
+        logger.debug(
+          'Resolved working directory',
+          safeAuditRecord('operation', {
+            ...appContext,
+            repositoryId: targetPath,
+          }),
+        );
       } else {
         // Path expected but not found - this should never happen with correct schemas
         // Fall back to session directory with warning
         logger.warning(
           'Tool expected path resolution but input has no path property',
-          {
-            ...appContext,
-            inputType: typeof input,
-            inputKeys:
-              typeof input === 'object' && input !== null
-                ? Object.keys(input)
-                : [],
-            skipPathResolution: options.skipPathResolution,
-          },
+          safeAuditRecord('exception', appContext),
         );
         targetPath = await resolveWorkingDirectory('.', appContext, storage);
       }
