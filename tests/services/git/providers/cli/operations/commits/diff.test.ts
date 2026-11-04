@@ -12,7 +12,7 @@ type ExecGitFn = (
   args: string[],
   cwd: string,
   ctx: RequestContext,
-) => Promise<{ stdout: string; stderr: string }>;
+) => Promise<{ stdout: string; stderr: string; exitCode?: number }>;
 
 describe('executeDiff', () => {
   const mockContext: GitOperationContext = {
@@ -270,16 +270,12 @@ new file mode 100644
         .mockResolvedValueOnce({ stdout: trackedDiff, stderr: '' })
         // ls-files for untracked
         .mockResolvedValueOnce({ stdout: 'untracked.txt\n', stderr: '' })
-        // diff --no-index for untracked file full diff (throws with exit code 1)
-        .mockRejectedValueOnce(
-          new Error(`Exit Code: 1\nStderr: \nStdout: ${untrackedDiff}`),
-        )
-        // diff --no-index for untracked file stat
-        .mockRejectedValueOnce(
-          new Error(
-            'Exit Code: 1\nStderr: \nStdout:  untracked.txt | 1 +\n 1 file changed, 1 insertion(+)',
-          ),
-        )
+        // One complete machine prefix plus unchanged patch; exit 1 is ordinary.
+        .mockResolvedValueOnce({
+          stdout: `1\t0\t\0/dev/null\0untracked.txt\0\0${untrackedDiff}`,
+          stderr: '',
+          exitCode: 1,
+        })
         // stat for tracked files
         .mockResolvedValueOnce({
           stdout: ' tracked.txt | 1 +\n 1 file changed, 1 insertion(+)',
@@ -323,25 +319,22 @@ new file mode 100644
           stdout: 'file1.txt\nfile2.txt\nfile3.txt\n',
           stderr: '',
         })
-        // Three untracked files: full diff + stat diff each
-        .mockRejectedValueOnce(
-          new Error('Exit Code: 1\nStderr: \nStdout: diff file1'),
-        )
-        .mockRejectedValueOnce(
-          new Error('Exit Code: 1\nStderr: \nStdout:  file1.txt | 1 +'),
-        )
-        .mockRejectedValueOnce(
-          new Error('Exit Code: 1\nStderr: \nStdout: diff file2'),
-        )
-        .mockRejectedValueOnce(
-          new Error('Exit Code: 1\nStderr: \nStdout:  file2.txt | 1 +'),
-        )
-        .mockRejectedValueOnce(
-          new Error('Exit Code: 1\nStderr: \nStdout: diff file3'),
-        )
-        .mockRejectedValueOnce(
-          new Error('Exit Code: 1\nStderr: \nStdout:  file3.txt | 1 +'),
-        )
+        // Three untracked files: one combined call each.
+        .mockResolvedValueOnce({
+          stdout: '1\t0\t\0/dev/null\0file1.txt\0\0diff file1',
+          stderr: '',
+          exitCode: 1,
+        })
+        .mockResolvedValueOnce({
+          stdout: '1\t0\t\0/dev/null\0file2.txt\0\0diff file2',
+          stderr: '',
+          exitCode: 1,
+        })
+        .mockResolvedValueOnce({
+          stdout: '1\t0\t\0/dev/null\0file3.txt\0\0diff file3',
+          stderr: '',
+          exitCode: 1,
+        })
         .mockResolvedValueOnce({ stdout: '', stderr: '' }); // stat
 
       const result = await executeDiff(
@@ -528,16 +521,12 @@ Binary files a/image.png and b/image.png differ`;
           stdout: 'new-file.txt\nbun.lock\n',
           stderr: '',
         })
-        // diff --no-index for new-file.txt (full)
-        .mockRejectedValueOnce(
-          new Error('Exit Code: 1\nStderr: \nStdout: diff new-file'),
-        )
-        // diff --no-index for new-file.txt (stat)
-        .mockRejectedValueOnce(
-          new Error(
-            'Exit Code: 1\nStderr: \nStdout:  new-file.txt | 1 +\n 1 file changed, 1 insertion(+)',
-          ),
-        )
+        // One exact combined call after exclusion.
+        .mockResolvedValueOnce({
+          stdout: '1\t0\t\0/dev/null\0new-file.txt\0\0diff new-file',
+          stderr: '',
+          exitCode: 1,
+        })
         // stat
         .mockResolvedValueOnce({ stdout: '', stderr: '' });
 

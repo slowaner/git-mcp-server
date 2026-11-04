@@ -295,6 +295,32 @@ describeHttp('actual production HTTP parser and admission', () => {
     expect(created).toBe(5);
   });
 
+  test('initialization requires a request envelope before any factory allocation', async () => {
+    const value = app();
+    const { id: _id, ...withoutId } = init;
+    const { jsonrpc: _jsonrpc, ...withoutVersion } = init;
+    for (const invalid of [
+      withoutId,
+      { ...init, id: null },
+      withoutVersion,
+      { ...init, jsonrpc: '1.0' },
+      { ...init, jsonrpc: 2 },
+    ]) {
+      const response = await post(value, invalid);
+      expect(response.status).toBe(400);
+      expect(response.headers.get('mcp-session-id')).toBeNull();
+      await response.text();
+      expect(created).toBe(0);
+    }
+    for (const id of [0, 'initialize-request']) {
+      const response = await post(value, { ...init, id });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('mcp-session-id')).toBeTruthy();
+      expect(((await response.json()) as { id: unknown }).id).toBe(id);
+    }
+    expect(created).toBe(2);
+  });
+
   test('session cap, DELETE cleanup and independent app/session lifetimes', async () => {
     const first = app();
     const sid = await initialize(first);

@@ -104,6 +104,13 @@ export function superviseProcess(
               ? options.deadline
               : Math.min(deadline, options.deadline ?? deadline),
         });
+      } catch (error) {
+        // A request deadline aborts its process signal. Preserve the recorded
+        // request reason when this await resumes in that scope; cleanup errors
+        // still retain their higher priority.
+        if (error instanceof GitExecutionError && error.reason === 'CANCELLED')
+          throw getGitExecutionFailure() ?? error;
+        throw error;
       } finally {
         lease.dispose();
       }
@@ -333,7 +340,11 @@ async function runSupervisedProcess(
       bytes.total += chunk.byteLength;
     };
     const drainComplete = () => {
-      if (gitExit && stdoutEnded && stderrEnded && !stopping) stop();
+      if (!gitExit || !stdoutEnded || !stderrEnded || stopping) return;
+      // Git has exited and both output streams reached EOF. No graceful Git
+      // shutdown remains: keep the anchor live until one final group KILL.
+      stopping = true;
+      kill();
     };
     stdout.on('data', (chunk: Buffer) => consume('stdout', chunk));
     stderr.on('data', (chunk: Buffer) => consume('stderr', chunk));
@@ -410,7 +421,7 @@ async function runSupervisedProcess(
         }
         if (message.type === 'ready' && !ready && message.pid === groupId) {
           ready = true;
-          if (!stopping && signalGroup(0)) input.end('\n');
+          if (!stopping && signalGroup(0)) input.write('\n');
           else if (!stopping)
             stop(
               new GitExecutionError(

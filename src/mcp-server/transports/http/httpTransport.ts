@@ -1,6 +1,6 @@
 /**
  * @fileoverview Configures and starts the HTTP MCP transport using Hono.
- * This implementation uses the official @hono/mcp package for a fully
+ * This implementation uses the official MCP SDK transport for a fully
  * web-standard, platform-agnostic transport layer.
  *
  * Architecture: Each MCP session gets its own McpServer + StreamableHTTPTransport
@@ -473,10 +473,10 @@ export function createHttpApp(
       // New session — create per-session McpServer + Transport pair.
       // Each Protocol instance supports exactly one transport connection.
       // Validate the full initialization envelope before allocating server/transport.
-      const { isInitializeRequest, InitializeRequestSchema } =
+      const { JSONRPCRequestSchema, InitializeRequestSchema } =
         await import('@modelcontextprotocol/sdk/types.js');
       if (
-        !isInitializeRequest(body) ||
+        !JSONRPCRequestSchema.safeParse(body).success ||
         !InitializeRequestSchema.safeParse(body).success
       ) {
         throw new HttpLimitError(

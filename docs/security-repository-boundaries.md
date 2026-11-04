@@ -52,21 +52,42 @@ Init runs from an existing authorized ancestor and creates its destination only
 after effective config checks. Clone destinations, local source repositories and
 worktree add/move/remove paths use the same capability. Recursive submodule clone
 is unsupported because its additional sources cannot be preauthorized here.
+Fetch, pull and push explicitly disable native submodule recursion, overriding
+repository and operator recursion settings until every participating submodule's
+metadata, effective configuration and endpoints can be authorized. Ordinary
+superproject transfers remain supported; this is not an egress sandbox.
 Worktree operands are separated from options. Repository file operands and
 untracked no-index diff inputs cannot redirect through outside links; `/dev/null`
 is permitted only as the fixed empty left side of that internal diff.
+The fixed untracked-file body, stat and combined `--no-index` comparisons omit
+native Git-directory/common-directory and top-level queries because they compare
+filesystem files. Every call still checks canonical roots, complete
+repository metadata, current effective config and all URLs, plus one existing
+regular file operand. Ordinary repository commands retain both native namespace
+queries. Other no-index argument layouts are unsupported; there is no cached
+authority or public bypass mode.
+Full untracked diffs use one bounded machine-stat prefix and an unchanged patch
+per file. Only the qualified two-path NUL-framed record for the exact literal
+operand is supported; malformed output fails the whole request. Prefix bytes
+count toward the existing output budgets. Untracked-file enumeration remains
+unchanged; this framing does not by itself add newline filename support.
 The existing readonly diff auto-exclusions permit only removal-only plain ASCII
 basenames, without path separators, glob syntax or additional native magic.
 An outer `:(literal)` filename wrapper is decoded exactly once for authority
 checking; a filename that itself starts with those bytes remains literal.
 
-Every stored remote URL is checked, including dormant/multiple URLs, explicit
-push URLs and longest-prefix `insteadOf`/`pushInsteadOf` rewrites. Local file URLs
-are decoded as filesystem paths; ordinary paths are never URL-decoded. Local
-transfer sources must have authorized backing metadata before object/ref
-transfer. Configuring a missing local endpoint inside the grant is allowed;
-transfer requires an existing authorized repository. Home-relative paths,
-ambiguous local encodings and custom remote-helper transports fail closed.
+Every stored superproject remote URL is checked, including dormant/multiple
+URLs, explicit push URLs and longest-prefix `insteadOf`/`pushInsteadOf` rewrites.
+Local file URLs are decoded as filesystem paths; ordinary paths are never
+URL-decoded. Local transfer sources must have authorized backing metadata before
+object/ref transfer. Configuring a missing local endpoint inside the grant is
+allowed; transfer requires an existing authorized repository. Home-relative
+paths, ambiguous local encodings and custom remote-helper transports fail closed.
+Legacy named endpoints in Git/common-directory `remotes/` and `branches/`
+files are unsupported and rejected before native Git, including linked-worktree
+common metadata. Empty legacy scaffolding remains supported. Migrate these
+endpoints explicitly to authorized `remote.<name>.url` configuration; the server
+does not parse, migrate or delete legacy files automatically.
 An unsafe dormant remote can block other operations; repair its configuration
 through the trusted operator before retrying. Operator-native hooks, signing,
 global includes, helpers and network access remain trusted execution authority,

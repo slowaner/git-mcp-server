@@ -33,7 +33,7 @@ for (const runtime of ['node', process.execPath]) {
           MCP_HTTP_HOST: '127.0.0.1',
           MCP_HTTP_PORT: String(port),
           MCP_HTTP_MAX_PORT_RETRIES: '0',
-          MCP_HTTP_ALLOWED_HOSTS: `127.0.0.1:${port}`,
+          MCP_HTTP_ALLOWED_HOSTS: `127.0.0.1:${port},LOCALHOST:${port}`,
           MCP_ALLOWED_ORIGINS: 'https://client.example',
           MCP_AUTH_MODE: 'none',
           MCP_HTTP_MAX_BODY_BYTES: '1024',
@@ -67,7 +67,12 @@ for (const runtime of ['node', process.execPath]) {
           await new Promise((done) => setTimeout(done, 25));
         }
         expect(ready).toBe(true);
-        const init = JSON.stringify({
+        const canonicalHost = await fetch(`http://127.0.0.1:${port}/healthz`, {
+          headers: { host: `LoCaLhOsT:${port}` },
+        });
+        expect(canonicalHost.status).toBe(200);
+        await canonicalHost.text();
+        const initialization = {
           jsonrpc: '2.0',
           id: 1,
           method: 'initialize',
@@ -76,7 +81,43 @@ for (const runtime of ['node', process.execPath]) {
             capabilities: {},
             clientInfo: { name: 'runtime-test', version: '1' },
           },
-        });
+        };
+        const { id: _id, ...withoutId } = initialization;
+        const { jsonrpc: _jsonrpc, ...withoutVersion } = initialization;
+        for (const invalid of [
+          withoutId,
+          { ...initialization, id: null },
+          withoutVersion,
+          { ...initialization, jsonrpc: '1.0' },
+        ]) {
+          const rejected = await fetch(endpoint, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(invalid),
+          });
+          expect(rejected.status).toBe(400);
+          expect(rejected.headers.get('mcp-session-id')).toBeNull();
+          await rejected.text();
+        }
+        for (const id of [0, 'runtime-initialize']) {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ ...initialization, id }),
+          });
+          expect(response.status).toBe(200);
+          expect(((await response.json()) as { id: unknown }).id).toBe(id);
+          const deleted = await fetch(endpoint, {
+            method: 'DELETE',
+            headers: {
+              ...headers,
+              'mcp-session-id': response.headers.get('mcp-session-id')!,
+            },
+          });
+          expect(deleted.status).toBe(200);
+          await deleted.text();
+        }
+        const init = JSON.stringify(initialization);
         const accepted = await fetch(endpoint, {
           method: 'POST',
           headers,

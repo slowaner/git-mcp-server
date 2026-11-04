@@ -19,7 +19,10 @@ import { GitExecutionError } from './execution-errors.js';
 import path from 'node:path';
 import { getConfiguredRepositoryPolicy } from '../../../core/configured-repository-policy.js';
 import { containsPath } from '../../../core/repository-capability.js';
-import { authorizeGitCommand } from '../../../core/repository-command-gate.js';
+import {
+  authorizeGitCommand,
+  disableSubmoduleRecursion,
+} from '../../../core/repository-command-gate.js';
 
 /** Internal provider options; repository roots are issued by server authorization. */
 export interface ExecuteGitOptions {
@@ -43,6 +46,7 @@ export async function executeGitCommand(
     options.signal,
     async () => {
       try {
+        args = disableSubmoduleRecursion(args);
         validateGitArgs(args);
         const roots = getConfiguredRepositoryPolicy(options.repositoryRoots);
         cwd = roots.resolve(cwd).path;

@@ -6,6 +6,8 @@ including ports and IPv6 brackets, for example `git.example:443,[::1]:3015`.
 Use the canonical authority (`git.example` for the default HTTP port). Without
 this setting only `localhost`, `127.0.0.1` and `[::1]` at the actual listening port
 are accepted. Wildcard bind addresses do not extend this allowlist.
+Configured DNS names and IPv6 authorities are canonicalized to lowercase; ports
+remain exact. Wildcards are not accepted as configured authorities.
 
 `MCP_ALLOWED_ORIGINS` contains exact HTTP(S) origins, without paths or wildcards.
 An empty list disables browser clients. Foreign and `null` origins are rejected;
@@ -25,10 +27,17 @@ The independent `@hono/mcp` parser has been removed. The SDK's Web Standards
 transport receives only an already bounded, parsed single JSON-RPC message.
 JSON-RPC batch arrays are rejected (400), including one-message arrays.
 POST uses JSON responses; standalone GET SSE remains supported.
+Session creation requires both valid MCP initialization parameters and a JSON-RPC
+2.0 request envelope with a non-null integer or string ID. Missing IDs, null IDs
+and missing/invalid versions return 400 before session/factory allocation; ID `0`
+and string IDs remain supported.
 
 Authentication failures never read the body to recover a JSON-RPC ID. Their ID
 is `null`. Content-Length is checked before authentication, and accepted bodies
 are counted incrementally in UTF-8 bytes. Body deadlines include all chunks.
+One deadline race covers the whole bounded read, so fragmentation does not add
+deadline subscriptions per chunk. Timeout, abort or read failure cancels the
+reader and releases its lock without waiting for an uncooperative cancel hook.
 Invalid UTF-8/JSON returns 400; excessive bytes/structure returns 413; body or
 operation deadline/disconnect returns 408. Cancellation closes the affected
 session's transport correlations; clients reinitialize after losing a session.

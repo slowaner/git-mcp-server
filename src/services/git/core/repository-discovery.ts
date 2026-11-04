@@ -194,10 +194,16 @@ export function discoverRepository(
     worktree = policy.resolve(configuredWorktree.at(-1)!, gitDirectory).path;
   if (worktree) policy.resolve(worktree);
 
+  const legacyDirectories = new Set(
+    [gitDirectory, commonDirectory].flatMap((directory) =>
+      ['remotes', 'branches'].map((name) => path.join(directory, name)),
+    ),
+  );
   const visited = new Set<string>();
   let entries = 0;
-  const scan = (directory: string): void => {
+  const scan = (directory: string, legacyRemote = false): void => {
     const resolved = policy.resolve(directory).path;
+    legacyRemote ||= legacyDirectories.has(resolved);
     if (visited.has(resolved)) return;
     visited.add(resolved);
     if (!lstatSync(resolved).isDirectory()) deny('metadata directory expected');
@@ -205,7 +211,9 @@ export function discoverRepository(
       if (++entries > 100000) deny('metadata inventory exceeds entry limit');
       const filename = path.join(resolved, entry.name);
       policy.resolve(filename);
-      if (entry.isDirectory()) scan(filename);
+      if (entry.isDirectory()) scan(filename, legacyRemote);
+      else if (legacyRemote || legacyDirectories.has(filename))
+        deny('legacy named remote files are unsupported');
       else if (!entry.isFile()) deny('linked or special metadata');
       else if (entry.name === 'index' && lstatSync(filename).nlink !== 1)
         deny('hardlinked index');
