@@ -3,6 +3,7 @@
  * @module mcp-server/tools/definitions/git-set-working-dir
  */
 import { z } from 'zod';
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 
 import { resolveGitPath } from '../utils/git-path-policy.js';
 import { repositoryRootsFromContext } from '@/services/git/core/configured-repository-policy.js';
@@ -155,8 +156,7 @@ async function gitSetWorkingDirLogic(
 
   await ensureRepositoryReady(input, dependencies, tenantId);
 
-  const storageKey = `session:workingDir:${tenantId}`;
-  await storage.set(storageKey, input.path, appContext);
+  await workingDirectoryStore(storage, appContext).set(input.path);
 
   const { snapshot, warnings } = await gatherRepoSnapshot(
     { provider, appContext, workingDirectory: input.path },

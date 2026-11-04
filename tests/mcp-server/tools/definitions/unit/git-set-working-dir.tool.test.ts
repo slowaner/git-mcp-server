@@ -2,6 +2,7 @@
  * @fileoverview Unit tests for git-set-working-dir tool
  * @module tests/mcp-server/tools/definitions/unit/git-set-working-dir.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
@@ -198,10 +199,10 @@ describe('git_set_working_dir tool', () => {
 
       await gitSetWorkingDirTool.logic(parsedInput, appContext, sdkContext);
 
-      const storedPath = await mockStorage.get<string>(
-        'session:workingDir:test-tenant',
+      const storedPath = await workingDirectoryStore(
+        mockStorage,
         appContext,
-      );
+      ).get();
       expect(storedPath).toBe('/test/repo');
     });
 
@@ -352,10 +353,10 @@ describe('git_set_working_dir tool', () => {
 
       await gitSetWorkingDirTool.logic(parsedInput, appContext, sdkContext);
 
-      const storedPath = await mockStorage.get<string>(
-        'session:workingDir:default-tenant',
+      const storedPath = await workingDirectoryStore(
+        mockStorage,
         appContext,
-      );
+      ).get();
       expect(storedPath).toBe('/test/repo');
     });
   });

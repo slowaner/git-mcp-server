@@ -3,6 +3,12 @@
  * @module src/storage/providers/cloudflare/kvProvider
  */
 import type { KVNamespace } from '@cloudflare/workers-types';
+import {
+  encodeStorageKey,
+  encodeStoragePrefix,
+  decodeStorageKey,
+  storageTenantPrefix,
+} from '@/storage/core/storageKeyCodec.js';
 
 import type {
   IStorageProvider,
@@ -29,7 +35,7 @@ export class KvProvider implements IStorageProvider {
   }
 
   private getKvKey(tenantId: string, key: string): string {
-    return `${tenantId}:${key}`;
+    return encodeStorageKey(tenantId, key);
   }
 
   async get<T>(
@@ -133,7 +139,7 @@ export class KvProvider implements IStorageProvider {
     context: RequestContext,
     options?: ListOptions,
   ): Promise<ListResult> {
-    const kvPrefix = this.getKvKey(tenantId, prefix);
+    const kvPrefix = encodeStoragePrefix(tenantId, prefix);
     return ErrorHandler.tryCatch(
       async () => {
         logger.debug(`[KvProvider] Listing keys with prefix: ${kvPrefix}`, {
@@ -152,11 +158,8 @@ export class KvProvider implements IStorageProvider {
         }
         const listed = await this.kv.list(listOptions);
 
-        const tenantPrefix = `${tenantId}:`;
         const keys = listed.keys.map((keyInfo) =>
-          keyInfo.name.startsWith(tenantPrefix)
-            ? keyInfo.name.substring(tenantPrefix.length)
-            : keyInfo.name,
+          decodeStorageKey(tenantId, keyInfo.name),
         );
 
         const nextCursor =
@@ -249,7 +252,7 @@ export class KvProvider implements IStorageProvider {
   async clear(tenantId: string, context: RequestContext): Promise<number> {
     return ErrorHandler.tryCatch(
       async () => {
-        const kvPrefix = `${tenantId}:`;
+        const kvPrefix = storageTenantPrefix(tenantId);
         let deletedCount = 0;
         let cursor: string | undefined;
         let listComplete = false;
@@ -265,6 +268,9 @@ export class KvProvider implements IStorageProvider {
           }
           const listed = await this.kv.list(listOpts);
 
+          // Validate the entire backend page before the first destructive call.
+          for (const keyInfo of listed.keys)
+            decodeStorageKey(tenantId, keyInfo.name);
           const deletePromises = listed.keys.map((keyInfo) =>
             this.kv.delete(keyInfo.name),
           );

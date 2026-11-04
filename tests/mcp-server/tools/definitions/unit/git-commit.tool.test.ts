@@ -2,6 +2,7 @@
  * @fileoverview Unit tests for git-commit tool
  * @module tests/mcp-server/tools/definitions/unit/git-commit.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
@@ -46,7 +47,7 @@ describe('git_commit tool', () => {
     // Set up default session working directory
     const tenantId = 'test-tenant';
     const context = createTestContext({ tenantId });
-    mockStorage.set(`session:workingDir:${tenantId}`, '/test/repo', context);
+    workingDirectoryStore(mockStorage, context).set('/test/repo');
   });
 
   describe('Input Schema', () => {

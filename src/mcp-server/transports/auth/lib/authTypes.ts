@@ -3,12 +3,15 @@
  * @module src/mcp-server/transports/auth/core/auth.types
  */
 import type { AuthInfo as SdkAuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { VerifiedPrincipal } from './verifiedPrincipal.js';
 
 /**
  * Defines the structure for authentication information derived from a token.
  * It extends the base SDK type to include common optional claims.
  */
 export type AuthInfo = SdkAuthInfo & {
+  /** Immutable identity extracted only after cryptographic token verification. */
+  principal?: VerifiedPrincipal;
   subject?: string;
   /** The unique identifier for the tenant associated with this authentication context. */
   tenantId?: string;

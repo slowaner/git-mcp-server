@@ -120,6 +120,22 @@ describeHttp('actual production HTTP parser and admission', () => {
   test('real auth denial does not pull chunked body or allocate server', async () => {
     config.mcpAuthMode = 'jwt';
     config.mcpAuthSecretKey = 'synthetic-unit-test-secret-material-only';
+    config.mcpAuthIssuer = 'https://issuer.example.test';
+    config.mcpAuthAudience = 'http-fixture';
+    config.mcpRepositoryGrants = JSON.stringify([
+      {
+        issuer: config.mcpAuthIssuer,
+        tenantId: 'fixture',
+        clientId: 'fixture',
+        subject: 'fixture',
+        roots: [process.cwd()],
+      },
+    ]);
+    config.git = {
+      ...config.git,
+      executionProfile: 'trusted',
+      baseDirs: [process.cwd()],
+    };
     container.registerInstance(AppConfig, config);
     container.registerInstance(Logger, logger);
     const value = app();
