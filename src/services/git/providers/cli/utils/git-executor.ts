@@ -11,7 +11,18 @@ import {
   assertConfiguredGitExecutionPolicy,
   withConfiguredGitExecutionContext,
 } from './configured-execution-policy.js';
-import { getGitExecutionFailure } from './execution-context.js';
+import {
+  getGitExecutionFailure,
+  recordGitExecutionFailure,
+} from './execution-context.js';
+import { GitExecutionError } from './execution-errors.js';
+import path from 'node:path';
+import { getConfiguredRepositoryPolicy } from '../../../core/configured-repository-policy.js';
+import { containsPath } from '../../../core/repository-capability.js';
+import {
+  authorizeGitCommand,
+  disableSubmoduleRecursion,
+} from '../../../core/repository-command-gate.js';
 
 /** Internal provider options; repository roots are issued by server authorization. */
 export interface ExecuteGitOptions {
@@ -35,7 +46,36 @@ export async function executeGitCommand(
     options.signal,
     async () => {
       try {
+        args = disableSubmoduleRecursion(args);
         validateGitArgs(args);
+        const roots = getConfiguredRepositoryPolicy(options.repositoryRoots);
+        cwd = roots.resolve(cwd).path;
+        const env = buildGitEnv(process.env, policy);
+        if (roots.roots)
+          env.GIT_CEILING_DIRECTORIES = [
+            ...new Set(
+              roots.roots
+                .filter(
+                  (root) =>
+                    !roots.roots!.some(
+                      (other) => other !== root && containsPath(other, root),
+                    ),
+                )
+                .map((root) => path.dirname(root)),
+            ),
+          ].join(path.delimiter);
+        // Private closure: all discovery uses the same controlled environment,
+        // execution lifetime, raw aggregate budget and strict UTF-8 decoder.
+        const introspect = (command: string[], directory: string) =>
+          spawnGitCommand(
+            command,
+            directory,
+            env,
+            undefined,
+            options.signal,
+            true,
+            { policy, deadline: options.deadline },
+          );
         if (!existsSync(cwd)) {
           throw new McpError(
             JsonRpcErrorCode.InvalidRequest,
@@ -48,16 +88,25 @@ export async function executeGitCommand(
             'Working directory is not a directory.',
           );
         }
+        cwd = await authorizeGitCommand(roots, args, cwd, introspect);
         return await spawnGitCommand(
           args,
           cwd,
-          buildGitEnv(process.env, policy),
+          env,
           undefined,
           options.signal,
           options.allowNonZeroExit,
           { policy, deadline: options.deadline },
         );
       } catch (error) {
+        if (
+          error instanceof McpError &&
+          error.code === JsonRpcErrorCode.Forbidden
+        ) {
+          throw recordGitExecutionFailure(
+            new GitExecutionError('REPOSITORY_BOUNDARY', error.message),
+          );
+        }
         throw mapGitError(error, args[0] || 'unknown');
       }
     },

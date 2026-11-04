@@ -4,6 +4,8 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { container } from 'tsyringe';
+import { installTrustedGitFixture } from '../../tools/definitions/helpers/testContext.js';
+installTrustedGitFixture();
 
 import { gitWorkingDirectoryResource } from '@/mcp-server/resources/definitions/git-working-directory.resource.js';
 import { StorageService as StorageServiceToken } from '@/container/tokens.js';

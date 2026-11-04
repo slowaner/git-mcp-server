@@ -147,6 +147,19 @@ export function getGitExecutionFailure(): GitExecutionError | undefined {
   );
 }
 
+/** Preserve authorization failures even if an operation catches an optional call. */
+export function recordGitExecutionFailure(
+  error: GitExecutionError,
+): GitExecutionError {
+  const state = getState();
+  if (state) {
+    state.failure ??= error;
+    state.controller.abort();
+    return state.failure;
+  }
+  return error;
+}
+
 /** Observe all native calls, including forgotten promises, without retaining output. */
 export function trackGitExecution<T>(promise: Promise<T>): Promise<T> {
   const state = getState();

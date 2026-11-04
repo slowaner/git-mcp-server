@@ -15,6 +15,17 @@ import {
   mapGitError,
   parseGitDiffStat,
 } from '../../utils/index.js';
+import type { ExecuteGitOptions } from '../../utils/git-executor.js';
+import { GitExecutionError } from '../../utils/execution-errors.js';
+import { recordGitExecutionFailure } from '../../utils/execution-context.js';
+import { parseUntrackedDiffOutput } from '../../utils/untracked-diff-output.js';
+
+type DiffExecutor = (
+  args: string[],
+  cwd: string,
+  ctx: RequestContext,
+  options?: ExecuteGitOptions,
+) => Promise<{ stdout: string; stderr: string; exitCode?: number }>;
 
 /**
  * Execute git diff to show changes.
@@ -27,11 +38,7 @@ import {
 export async function executeDiff(
   options: GitDiffOptions,
   context: GitOperationContext,
-  execGit: (
-    args: string[],
-    cwd: string,
-    ctx: RequestContext,
-  ) => Promise<{ stdout: string; stderr: string }>,
+  execGit: DiffExecutor,
 ): Promise<GitDiffResult> {
   try {
     // Git requires: git diff [flags] [commits] -- [paths]
@@ -171,22 +178,14 @@ export async function executeDiff(
         if (options.nameOnly) {
           untrackedDiff += `${file}\n`;
         } else {
-          const result = await execUntrackedDiff(execGit, context, file, false);
-          if (result) {
-            untrackedDiff += result;
-          }
-          // Parse each file's stat individually to avoid summary-line overwrite
-          const statResult = await execUntrackedDiff(
+          const result = await execCombinedUntrackedDiff(
             execGit,
             context,
             file,
-            true,
           );
-          if (statResult) {
-            const fileStat = parseGitDiffStat(statResult);
-            untrackedAdditions += fileStat.totalAdditions;
-            untrackedDeletions += fileStat.totalDeletions;
-          }
+          untrackedDiff += result.patch;
+          untrackedAdditions += result.insertions;
+          untrackedDeletions += result.deletions;
         }
       }
     }
@@ -230,6 +229,42 @@ export async function executeDiff(
   } catch (error) {
     throw mapGitError(error, 'diff');
   }
+}
+
+/** One qualified machine prefix and opaque patch; no error-text extraction. */
+async function execCombinedUntrackedDiff(
+  execGit: DiffExecutor,
+  context: GitOperationContext,
+  file: string,
+) {
+  const result = await execGit(
+    buildGitCommand({
+      command: 'diff',
+      args: [
+        '--no-index',
+        '--numstat',
+        '-z',
+        '--patch',
+        '--',
+        '/dev/null',
+        file,
+      ],
+    }),
+    context.workingDirectory,
+    context.requestContext,
+    { allowNonZeroExit: true },
+  );
+  // This soft ordinary exit never accepts a runtime/control failure. Numeric
+  // 0/1 are the only complete native outcomes qualified for the fixed tuple.
+  if (result.exitCode !== 0 && result.exitCode !== 1) {
+    throw recordGitExecutionFailure(
+      new GitExecutionError(
+        'INVALID_OUTPUT_FORMAT',
+        'Invalid combined untracked Git diff output.',
+      ),
+    );
+  }
+  return parseUntrackedDiffOutput(result.stdout, file);
 }
 
 /**

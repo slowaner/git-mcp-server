@@ -5,6 +5,7 @@
 import { z } from 'zod';
 
 import { resolveGitPath } from '../utils/git-path-policy.js';
+import { repositoryRootsFromContext } from '@/services/git/core/configured-repository-policy.js';
 
 import { withToolAuth } from '@/mcp-server/transports/auth/lib/withAuth.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
@@ -112,6 +113,7 @@ async function ensureRepositoryReady(
     workingDirectory: input.path,
     requestContext: appContext,
     tenantId,
+    repositoryRoots: repositoryRootsFromContext(appContext),
   };
 
   try {
@@ -145,7 +147,10 @@ async function gitSetWorkingDirLogic(
   const tenantId = appContext.tenantId || 'default-tenant';
   input = {
     ...input,
-    path: await resolveGitPath(input.path, { unrestrictedRelative: true }),
+    path: await resolveGitPath(input.path, {
+      unrestrictedRelative: true,
+      repositoryRoots: repositoryRootsFromContext(appContext),
+    }),
   };
 
   await ensureRepositoryReady(input, dependencies, tenantId);

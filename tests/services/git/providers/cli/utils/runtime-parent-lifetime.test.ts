@@ -327,6 +327,10 @@ describe('qualified parent-lifetime fixtures', { timeout: 60000 }, () => {
     operation: (driver: Driver) => Promise<void>,
   ) => {
     const driver = await start(runtime);
+    const cleanupObservedAt = Date.now();
+    let driverExit:
+      { code: number | null; signal: NodeJS.Signals | null } | undefined;
+    let quiescencePassed = false;
     try {
       await operation(driver);
     } finally {
@@ -335,9 +339,11 @@ describe('qualified parent-lifetime fixtures', { timeout: 60000 }, () => {
       try {
         if (driver.child.exitCode === null && driver.child.signalCode === null)
           driver.child.stdin.write('abort\n');
-        await within(driver.closed, 6000);
-        if (driver.ready) await quiescent(driver, 5000);
-        else {
+        driverExit = await within(driver.closed, 6000);
+        if (driver.ready) {
+          await quiescent(driver, 5000);
+          quiescencePassed = true;
+        } else {
           const result = (await jsonIfPresent(
             path.join(driver.directory, 'driver-result.json'),
           )) as { reason: string } | undefined;
@@ -347,8 +353,32 @@ describe('qualified parent-lifetime fixtures', { timeout: 60000 }, () => {
             'orderly abort before trusted identity',
           );
         }
+        console.info(
+          JSON.stringify({
+            diagnostic: 'lifetime-finally',
+            runtime,
+            driverClosed: driverExit !== undefined,
+            driverExitCode: driverExit?.code ?? null,
+            driverExitSignal: driverExit?.signal ?? null,
+            ready: driver.ready !== undefined,
+            quiescencePassed,
+            observedAfterStartMs: Date.now() - cleanupObservedAt,
+          }),
+        );
         settled.add(driver.directory);
       } catch (error) {
+        console.info(
+          JSON.stringify({
+            diagnostic: 'lifetime-finally-failed',
+            runtime,
+            driverClosed: driverExit !== undefined,
+            driverExitCode: driverExit?.code ?? null,
+            driverExitSignal: driverExit?.signal ?? null,
+            ready: driver.ready !== undefined,
+            quiescencePassed,
+            observedAfterStartMs: Date.now() - cleanupObservedAt,
+          }),
+        );
         throw new Error(
           'Owned fixture cleanup remains uncertain: ' + driver.directory,
           { cause: error },
@@ -389,13 +419,111 @@ describe('qualified parent-lifetime fixtures', { timeout: 60000 }, () => {
       const result = (await waitFor(
         () => jsonIfPresent(path.join(driver.directory, 'driver-result.json')),
         6000,
-      )) as { reason: string };
-      assert.equal(result.reason, 'CLEANUP_FAILED');
-      const guard = (await jsonIfPresent(
+      )) as {
+        nonce?: string;
+        reason: string;
+        message?: string;
+        finishedAfterStartMs?: number;
+        finishedAt?: number;
+        rejectedWithGitExecutionError?: boolean;
+      };
+      const resultObservedAt = Date.now();
+      const guardBeforeAssertion = (await jsonIfPresent(
         path.join(driver.directory, 'guard-fired.json'),
-      )) as { nonce: string };
-      assert.equal(guard.nonce, driver.nonce);
+      )) as { nonce?: string; anchor?: number; at?: number } | undefined;
+      let guardError: string | undefined;
+      try {
+        guardError = await readFile(
+          path.join(driver.directory, 'guard-error'),
+          'utf8',
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      const guardTime = guardBeforeAssertion?.at;
+      const validGuardTime = Number.isSafeInteger(guardTime);
+      console.info(
+        JSON.stringify({
+          diagnostic: 'lifetime-hardstop',
+          runtime,
+          reason: result.reason,
+          message: result.message ?? null,
+          finishedAfterStartMs: result.finishedAfterStartMs ?? null,
+          guardPresent: guardBeforeAssertion !== undefined,
+          guardNonceMatches: guardBeforeAssertion?.nonce === driver.nonce,
+          guardAnchorMatches:
+            guardBeforeAssertion?.anchor === driver.ready!.anchor,
+          guardTimeValid: validGuardTime,
+          typedRejection: result.rejectedWithGitExecutionError === true,
+          finishedAtValid: Number.isSafeInteger(result.finishedAt),
+          finishAfterGuardMs:
+            validGuardTime && Number.isSafeInteger(result.finishedAt)
+              ? result.finishedAt! - guardTime!
+              : null,
+          guardAfterHardStopMs: validGuardTime
+            ? guardTime! - driver.ready!.hardStopAt
+            : null,
+          guardBeforeResultObserved: validGuardTime
+            ? guardTime! <= resultObservedAt
+            : null,
+          guardToResultObservationMs: validGuardTime
+            ? resultObservedAt - guardTime!
+            : null,
+          guardErrorPresent: guardError !== undefined,
+          guardErrorKnown: guardError === 'Fixture hardstop was not verified',
+        }),
+      );
+      assert.equal(result.nonce, driver.nonce);
+      assert.equal(result.rejectedWithGitExecutionError, true);
+      assert.ok(guardBeforeAssertion);
+      assert.equal(guardBeforeAssertion.nonce, driver.nonce);
+      assert.equal(guardBeforeAssertion.anchor, driver.ready!.anchor);
+      assert.ok(
+        Number.isSafeInteger(driver.ready!.hardStopAt) &&
+          driver.ready!.hardStopAt > 0,
+      );
+      assert.ok(validGuardTime && guardTime! > 0);
+      assert.ok(
+        Number.isSafeInteger(result.finishedAt) && result.finishedAt! > 0,
+      );
+      assert.ok(guardTime! >= driver.ready!.hardStopAt);
+      assert.ok(result.finishedAt! >= guardTime!);
+      assert.equal(guardError, undefined);
+      // Simultaneous helper and anchor termination has two exact typed
+      // witnesses; identity, timing and primary cleanup remain mandatory.
+      if (result.reason === 'SIGNAL_EXIT') {
+        assert.equal(result.message, 'Git command terminated by signal.');
+      } else {
+        assert.equal(result.reason, 'CLEANUP_FAILED');
+        assert.equal(
+          result.message,
+          'Git group anchor exited before supervised termination.',
+        );
+      }
+      const exit = await within(driver.closed, 6000);
+      assert.equal(exit.code, 0);
+      assert.equal(exit.signal, null);
+      const primaryStartedAt = Date.now();
       await quiescent(driver, 1000);
+      assert.equal(
+        await jsonIfPresent(path.join(driver.directory, 'guard-error')),
+        undefined,
+      );
+      console.info(
+        JSON.stringify({
+          diagnostic: 'lifetime-hardstop-primary',
+          runtime,
+          reason: result.reason,
+          typedRejection: true,
+          identityAndEpochTimingPassed: true,
+          driverClosed: true,
+          driverExitCode: exit.code,
+          driverExitSignal: exit.signal,
+          primaryQuiescencePassed: true,
+          primaryElapsedMs: Date.now() - primaryStartedAt,
+          beforeFinally: true,
+        }),
+      );
     });
   };
 
@@ -453,7 +581,8 @@ describe('qualified parent-lifetime fixtures', { timeout: 60000 }, () => {
           assert.equal(exit.code, null);
           assert.equal(exit.signal, 'SIGKILL');
           await quiescent(driver, Math.max(1, 1000 - (Date.now() - started)));
-          assert.ok(Date.now() - started <= 1000);
+          const autonomousCleanupMs = Date.now() - started;
+          assert.ok(autonomousCleanupMs <= 1000);
           assert.equal(
             await jsonIfPresent(
               path.join(driver.directory, 'driver-result.json'),
@@ -471,6 +600,19 @@ describe('qualified parent-lifetime fixtures', { timeout: 60000 }, () => {
           assert.equal(
             await jsonIfPresent(path.join(driver.directory, 'guard-error')),
             undefined,
+          );
+          console.info(
+            JSON.stringify({
+              diagnostic: 'lifetime-parent-death-primary',
+              runtime,
+              autonomousCleanupMs,
+              driverExitCode: exit.code,
+              driverExitSignal: exit.signal,
+              noResult: true,
+              noGuard: true,
+              noGuardError: true,
+              beforeFinally: true,
+            }),
           );
           // All success assertions run before withDriver's finally fallback.
         });

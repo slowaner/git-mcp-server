@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveGitPath } from '../utils/git-path-policy.js';
+import { repositoryRootsFromContext } from '@/services/git/core/configured-repository-policy.js';
 
 import type { ToolDefinition } from '../utils/toolDefinition.js';
 import { withToolAuth } from '@/mcp-server/transports/auth/lib/withAuth.js';
@@ -68,13 +69,18 @@ async function gitCloneLogic(
 ): Promise<ToolOutput> {
   const destination = await resolveGitPath(input.path, {
     unrestrictedRelative: true,
+    repositoryRoots: repositoryRootsFromContext(appContext),
   });
   let source = input.url;
   if (/^file:\/\//i.test(source)) {
     // Validate the decoded filesystem path; keep URL encoding for Git itself.
-    await resolveGitPath(fileURLToPath(source));
+    await resolveGitPath(fileURLToPath(source), {
+      repositoryRoots: repositoryRootsFromContext(appContext),
+    });
   } else if (path.isAbsolute(source)) {
-    source = await resolveGitPath(source);
+    source = await resolveGitPath(source, {
+      repositoryRoots: repositoryRootsFromContext(appContext),
+    });
   }
 
   const cloneOptions: {
@@ -102,6 +108,7 @@ async function gitCloneLogic(
     workingDirectory: process.cwd(),
     requestContext: appContext,
     tenantId: appContext.tenantId || 'default-tenant',
+    repositoryRoots: repositoryRootsFromContext(appContext),
   });
 
   return {
