@@ -1,0 +1,10 @@
+name: Source and release security
+paths:
+  - src
+  - scripts
+paths-ignore:
+  - node_modules
+  - dist
+  - coverage
+queries:
+  - uses: security-extended

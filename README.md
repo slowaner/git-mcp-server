@@ -7,13 +7,16 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-2.15.3-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--11--25-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.30.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/git-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-2.15.3-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--11--25-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-1.32.2-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/git-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
 ---
 
 ## Tools
+
+HTTP deployments enforce explicit Host/Origin trust and bounded parsing, sessions,
+streams and work. See [HTTP security configuration and compatibility](docs/security-http.md).
 
 28 git operations organized into seven categories:
 
@@ -96,7 +99,7 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 | Provider architecture        | Pluggable git provider system. Current: CLI. Planned: isomorphic-git for edge deployment.                                                                                                                                         |
 | Working directory management | Session-specific directory context for multi-repo workflows.                                                                                                                                                                      |
 | Configurable git identity    | Override author/committer info via environment variables, with fallback to global git config.                                                                                                                                     |
-| Commit signing               | Explicit signing by default for commits, tags, merges, rebases, cherry-picks, and pulls. Set `GIT_SIGN_COMMITS=false` to follow native Git signing config. Commit/tag retries report actual `signed` status and `signingWarning`. |
+| Commit signing               | Explicit signing by default for commits, tags, merges, rebases, cherry-picks, and pulls. Set `GIT_SIGN_COMMITS=false` to follow native Git signing config. Commit/tag creation runs once; required signing never retries unsigned. `signed` reports presence, not trust. |
 | Safety                       | Destructive operations (`git clean`, `git reset --hard`) require explicit confirmation flags.                                                                                                                                     |
 
 ## Security
@@ -105,8 +108,12 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 - Optional `GIT_BASE_DIR` restricts Git paths to one or more explicitly allowed directory trees. This lexical check is not an OS sandbox.
 - Git commands use validated arguments via process spawning — no shell interpolation.
 - JWT and OAuth support for authenticated deployments.
+
+Authenticated HTTP requires an explicit issuer/audience, bounded tokens and exact principal repository grants. Development verification bypass is unsupported. See [authentication, session ownership and storage compatibility](docs/security/auth-sessions.md).
+
 - Optional rate limiting via the DI-managed `RateLimiter` service.
-- All operations are logged with request context for auditing.
+- Audit events use an allowlisted, payload-free schema with keyed correlations.
+  See [Git integrity, signing and safety semantics](docs/security-integrity.md).
 
 ## Configuration
 
@@ -115,10 +122,11 @@ preserves Git's system, global, repository, and conditional-include configuratio
 including `commit.gpgSign`, `tag.gpgSign`, `tag.forceSignAnnotated`, `gpg.format`,
 and `user.signingKey`. It does not disable signing or choose a different key.
 Configured signing failures propagate. With `GIT_SIGN_COMMITS=true` (the default),
-signing is explicitly requested; only commit/tag creation retries a failure
-without that explicit request, leaving native configuration active. The retry
-can still sign or fail. Commit/tag `signed` reports signature presence, not trust
-verification; `signingWarning` reports a retry.
+signing is explicitly requested and commit/tag creation fails without an
+unsigned retry. Each creation runs once so hooks cannot repeat on fallback.
+Commit/tag `signed` reports signature presence, not cryptographic validity or
+verifier trust. Native policy remains active from the first attempt when
+`GIT_SIGN_COMMITS=false`.
 
 All configuration is validated at startup in `src/config/index.ts`. Key environment variables:
 
@@ -135,12 +143,12 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 | `STORAGE_PROVIDER_TYPE`        | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv`, `r2`.                                                                                                                               | `in-memory` |
 | `OTEL_ENABLED`                 | Enable OpenTelemetry.                                                                                                                                                                                        | `false`     |
 | `MCP_LOG_LEVEL`                | Minimum log level: `debug`, `info`, `warn`, `error`.                                                                                                                                                         | `info`      |
-| `GIT_SIGN_COMMITS`             | Explicit signing for commits, tags, merges, rebases, cherry-picks, and pulls; `false` defers to native Git config. Only commit/tag retries remove the explicit signing flag (see `signed`/`signingWarning`). | `true`      |
+| `GIT_SIGN_COMMITS`             | Explicit signing for commits, tags, merges, rebases, cherry-picks, and pulls; `false` defers to native Git config. Commit/tag creation never retries unsigned; inspect actual `signed` presence separately from verification. | `true`      |
 | `GIT_AUTHOR_NAME`              | Git author name. Aliases: `GIT_USERNAME`, `GIT_USER`. Falls back to global git config.                                                                                                                       | `(none)`    |
 | `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                                                                                   | `(none)`    |
 | `GIT_BASE_DIR`                 | Comma-separated absolute directory roots; the first anchors relative repository paths. Tilde expansion is supported; literal commas in roots are not.                                                        | `(none)`    |
 | `GIT_WRAPUP_INSTRUCTIONS_PATH` | Path to custom markdown file with workflow instructions.                                                                                                                                                     | `(none)`    |
-| `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ character secret key.                                                                                                                                                           | `(none)`    |
+| `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ UTF-8 byte random secret, required issuer/audience; no development bypass.                                                                                                      | `(none)`    |
 | `OAUTH_ISSUER_URL`             | Required for `oauth` auth. OIDC provider URL.                                                                                                                                                                | `(none)`    |
 
 ## Running the server
@@ -170,11 +178,7 @@ npm test
 
 ### Cloudflare Workers
 
-```sh
-npm run build:worker   # Build the worker bundle
-npm run deploy:dev     # Run locally with Wrangler
-npm run deploy:prod    # Deploy to Cloudflare
-```
+The experimental Worker profile is unsupported: its entrypoint returns 503 for every route and method before bindings or application services are accessed. `bun run build:worker` builds this fail-closed response. See [Worker profile](docs/security/worker-profile.md); use the Node/local profile for application execution.
 
 ## Project structure
 

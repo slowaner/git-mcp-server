@@ -3,6 +3,9 @@
  * @module mcp-server/tools/definitions/git-clear-working-dir
  */
 import { z } from 'zod';
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
+import { resolveGitPath } from '../utils/git-path-policy.js';
+import { repositoryRootsFromContext } from '@/services/git/core/configured-repository-policy.js';
 
 import type { ToolDefinition } from '../utils/toolDefinition.js';
 import { withToolAuth } from '@/mcp-server/transports/auth/lib/withAuth.js';
@@ -46,15 +49,14 @@ async function gitClearWorkingDirLogic(
   _input: ToolInput,
   { storage, appContext }: ToolLogicDependencies,
 ): Promise<ToolOutput> {
-  // Graceful degradation for tenantId
-  const tenantId = appContext.tenantId || 'default-tenant';
-
-  // Get the current working directory before clearing
-  const storageKey = `session:workingDir:${tenantId}`;
-  const previousPath = await storage.get<string>(storageKey, appContext);
-
-  // Delete the working directory from session storage
-  await storage.delete(storageKey, appContext);
+  const state = workingDirectoryStore(storage, appContext);
+  const stored = await state.get();
+  const previousPath = stored
+    ? await resolveGitPath(stored, {
+        repositoryRoots: repositoryRootsFromContext(appContext),
+      })
+    : null;
+  await state.clear();
 
   return {
     success: true,

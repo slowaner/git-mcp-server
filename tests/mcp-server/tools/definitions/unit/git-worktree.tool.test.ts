@@ -2,7 +2,9 @@
  * @fileoverview Unit tests for git-worktree tool
  * @module tests/mcp-server/tools/definitions/unit/git-worktree.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitWorktreeTool } from '@/mcp-server/tools/definitions/git-worktree.tool.js';
@@ -24,6 +26,8 @@ import {
 import type { GitWorktreeResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
 
+installTrustedGitFixture();
+
 describe('git_worktree tool', () => {
   const mockProvider = createMockGitProvider();
   const mockStorage = createMockStorageService();
@@ -41,7 +45,7 @@ describe('git_worktree tool', () => {
 
     const tenantId = 'test-tenant';
     const context = createTestContext({ tenantId });
-    mockStorage.set(`session:workingDir:${tenantId}`, '/test/repo', context);
+    workingDirectoryStore(mockStorage, context).set('/test/repo');
   });
 
   describe('Input Schema', () => {
@@ -199,7 +203,9 @@ describe('git_worktree tool', () => {
       expect(mockProvider.worktree).toHaveBeenCalledTimes(1);
       const [worktreeOptions] = mockProvider.worktree.mock.calls[0]!;
       expect(worktreeOptions.mode).toBe('add');
-      expect(worktreeOptions.path).toBe('/tmp/new-worktree');
+      expect(worktreeOptions.path).toBe(
+        (await import('node:fs')).realpathSync('/tmp') + '/new-worktree',
+      );
       expect(worktreeOptions.branch).toBe('feature');
 
       expect(result.success).toBe(true);

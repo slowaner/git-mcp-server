@@ -2,7 +2,9 @@
  * @fileoverview Unit tests for git-branch tool
  * @module tests/mcp-server/tools/definitions/unit/git-branch.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitBranchTool } from '@/mcp-server/tools/definitions/git-branch.tool.js';
@@ -23,6 +25,8 @@ import {
 import type { GitBranchResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
 
+installTrustedGitFixture();
+
 describe('git_branch tool', () => {
   const mockProvider = createMockGitProvider();
   const mockStorage = createMockStorageService();
@@ -40,7 +44,7 @@ describe('git_branch tool', () => {
 
     const tenantId = 'test-tenant';
     const context = createTestContext({ tenantId });
-    mockStorage.set(`session:workingDir:${tenantId}`, '/test/repo', context);
+    workingDirectoryStore(mockStorage, context).set('/test/repo');
   });
 
   describe('Input Schema', () => {

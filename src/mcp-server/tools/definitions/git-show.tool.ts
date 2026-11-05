@@ -35,7 +35,7 @@ const InputSchema = z
       .enum(['raw'])
       .optional()
       .describe(
-        'Output format for the git object. Use "raw" for unprocessed git output.',
+        'Output format for the git object. "raw" returns complete UTF-8 text; malformed or binary non-UTF-8 output fails closed without partial content.',
       ),
     stat: z
       .boolean()

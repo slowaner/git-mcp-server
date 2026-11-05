@@ -109,10 +109,16 @@ describe('requestContextService', () => {
     expect(child.tenantId).toBe('child-tenant');
   });
 
-  it('falls back to the auth context tenant when none is provided elsewhere', async () => {
+  it('uses the verified principal tenant when none is provided elsewhere', async () => {
     await new Promise<void>((resolve) => {
       authContext.run(
         {
+          principal: {
+            issuer: 'https://issuer.example.test',
+            tenantId: 'auth-tenant',
+            clientId: 'test-client',
+            subject: 'user-1',
+          },
           authInfo: {
             subject: 'user-1',
             scopes: ['scope:a'],

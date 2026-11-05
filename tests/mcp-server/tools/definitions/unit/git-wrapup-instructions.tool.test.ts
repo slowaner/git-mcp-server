@@ -2,7 +2,9 @@
  * @fileoverview Unit tests for git-wrapup-instructions tool
  * @module tests/mcp-server/tools/definitions/unit/git-wrapup-instructions.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitWrapupInstructionsTool } from '@/mcp-server/tools/definitions/git-wrapup-instructions.tool.js';
@@ -64,6 +66,8 @@ function primeSnapshotMocks(
   mockProvider.tag.mockResolvedValue(tagResult);
 }
 
+installTrustedGitFixture();
+
 describe('git_wrapup_instructions tool', () => {
   const mockProvider = createMockGitProvider();
   const mockStorage = createMockStorageService();
@@ -81,7 +85,7 @@ describe('git_wrapup_instructions tool', () => {
 
     const tenantId = 'test-tenant';
     const context = createTestContext({ tenantId });
-    mockStorage.set(`session:workingDir:${tenantId}`, '/test/repo', context);
+    workingDirectoryStore(mockStorage, context).set('/test/repo');
   });
 
   describe('Input Schema', () => {
@@ -171,7 +175,7 @@ describe('git_wrapup_instructions tool', () => {
 
     it('emits an actionable warning when no working directory is set', async () => {
       const clearContext = createTestContext({ tenantId: 'test-tenant' });
-      await mockStorage.delete('session:workingDir:test-tenant', clearContext);
+      await workingDirectoryStore(mockStorage, clearContext).clear();
 
       const parsedInput = gitWrapupInstructionsTool.inputSchema.parse({
         acknowledgement: 'Y',

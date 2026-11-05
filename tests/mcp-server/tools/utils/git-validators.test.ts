@@ -3,6 +3,13 @@
  * @module tests/mcp-server/tools/utils/git-validators.test
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  currentPrincipal,
+  currentServerSessionId,
+} from '@/mcp-server/transports/auth/lib/requestIdentity.js';
+import { sessionWorkingDirectoryKey } from '@/mcp-server/transports/auth/lib/verifiedPrincipal.js';
+import { installTrustedGitFixture } from '../definitions/helpers/testContext.js';
+installTrustedGitFixture();
 
 import {
   resolveWorkingDirectory,
@@ -172,8 +179,11 @@ describe('resolveWorkingDirectory', () => {
     const result = await resolveWorkingDirectory('.', ctx, mockStorage as any);
 
     expect(mockStorage.get).toHaveBeenCalledWith(
-      'session:workingDir:test-tenant',
-      expect.objectContaining({ tenantId: 'test-tenant' }),
+      sessionWorkingDirectoryKey(currentPrincipal(), currentServerSessionId()),
+      expect.objectContaining({
+        tenantId: 'default-tenant',
+        principal: currentPrincipal(),
+      }),
     );
     expect(result).toBe('/stored/repo');
   });
@@ -207,7 +217,7 @@ describe('resolveWorkingDirectory', () => {
     await resolveWorkingDirectory('.', ctx, mockStorage as any);
 
     expect(mockStorage.get).toHaveBeenCalledWith(
-      'session:workingDir:default-tenant',
+      sessionWorkingDirectoryKey(currentPrincipal(), currentServerSessionId()),
       expect.objectContaining({ tenantId: 'default-tenant' }),
     );
   });

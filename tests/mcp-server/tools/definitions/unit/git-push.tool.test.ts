@@ -2,7 +2,9 @@
  * @fileoverview Unit tests for git-push tool
  * @module tests/mcp-server/tools/definitions/unit/git-push.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitPushTool } from '@/mcp-server/tools/definitions/git-push.tool.js';
@@ -24,6 +26,8 @@ import {
 import type { GitPushResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
 
+installTrustedGitFixture();
+
 describe('git_push tool', () => {
   const mockProvider = createMockGitProvider();
   const mockStorage = createMockStorageService();
@@ -41,7 +45,7 @@ describe('git_push tool', () => {
 
     const tenantId = 'test-tenant';
     const context = createTestContext({ tenantId });
-    mockStorage.set(`session:workingDir:${tenantId}`, '/test/repo', context);
+    workingDirectoryStore(mockStorage, context).set('/test/repo');
   });
 
   describe('Input Schema', () => {
@@ -193,6 +197,7 @@ describe('git_push tool', () => {
         force: true,
         tags: true,
         remoteBranch: 'main',
+        confirmed: true,
       });
       const appContext = createTestContext({ tenantId: 'test-tenant' });
       const sdkContext = createTestSdkContext();
@@ -204,6 +209,37 @@ describe('git_push tool', () => {
       expect(options.tags).toBe(true);
       expect(options.remoteBranch).toBe('main');
     });
+  });
+
+  describe('destructive destination policy', () => {
+    for (const destructive of [
+      { force: true },
+      { forceWithLease: true },
+      { delete: true },
+    ]) {
+      it(
+        'denies unconfirmed ' +
+          JSON.stringify(destructive) +
+          ' before provider access',
+        async () => {
+          const input = gitPushTool.inputSchema.parse({
+            path: '.',
+            branch: 'feature',
+            remoteBranch: 'refs/heads/main',
+            ...destructive,
+          });
+          await expect(
+            gitPushTool.logic(
+              input,
+              createTestContext({ tenantId: 'test-tenant' }),
+              createTestSdkContext(),
+            ),
+          ).rejects.toThrow(/confirmation/);
+          expect(mockProvider.push).not.toHaveBeenCalled();
+          expect(mockProvider.status).not.toHaveBeenCalled();
+        },
+      );
+    }
   });
 
   describe('Response Formatter', () => {

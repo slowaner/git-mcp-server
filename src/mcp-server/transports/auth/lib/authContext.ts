@@ -10,13 +10,18 @@
 import { AsyncLocalStorage } from 'async_hooks';
 
 import type { AuthInfo } from './authTypes.js';
+import type { VerifiedPrincipal } from './verifiedPrincipal.js';
 
 /**
  * Defines the structure of the store used within the AsyncLocalStorage.
  * It holds the authentication information for the current request context.
  */
-interface AuthStore {
-  authInfo: AuthInfo;
+export interface AuthStore {
+  authInfo?: AuthInfo;
+  readonly principal?: VerifiedPrincipal;
+  readonly sessionId?: string;
+  readonly repositoryRoots?: readonly string[];
+  readonly transport?: 'http' | 'stdio';
 }
 
 /**

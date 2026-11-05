@@ -2,7 +2,9 @@
  * @fileoverview Unit tests for git-init tool
  * @module tests/mcp-server/tools/definitions/unit/git-init.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitInitTool } from '@/mcp-server/tools/definitions/git-init.tool.js';
@@ -24,6 +26,8 @@ import {
 import type { GitInitResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
 
+installTrustedGitFixture();
+
 describe('git_init tool', () => {
   const mockProvider = createMockGitProvider();
   const mockStorage = createMockStorageService();
@@ -41,7 +45,7 @@ describe('git_init tool', () => {
 
     const tenantId = 'test-tenant';
     const context = createTestContext({ tenantId });
-    mockStorage.set(`session:workingDir:${tenantId}`, '/test/repo', context);
+    workingDirectoryStore(mockStorage, context).set('/test/repo');
   });
 
   describe('Input Schema', () => {

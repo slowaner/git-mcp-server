@@ -21,6 +21,12 @@ import type { RequestContext } from '@/utils/index.js';
  * multi-tenant deployments.
  */
 export interface GitOperationContext {
+  /** SDK/provider cancellation; no process may outlive the owning request. */
+  readonly signal?: AbortSignal | undefined;
+  /** Absolute operation deadline in milliseconds since the Unix epoch. */
+  readonly deadline?: number | undefined;
+  /** Internal server-authorized root ceiling. Absent and empty are distinct. */
+  readonly repositoryRoots?: readonly string[] | undefined;
   /** Request context for logging and tracing */
   requestContext: RequestContext;
   /** Working directory (repository path) */
@@ -262,9 +268,8 @@ export interface GitCommitResult {
    */
   signed: boolean;
   /**
-   * Populated only when signing was requested (`GIT_SIGN_COMMITS=true`)
-   * but failed, and creation was retried using native Git configuration.
-   * The retry may still produce a signed commit. Absent without a retry.
+   * Legacy compatibility field. Current commit creation never retries unsigned
+   * and does not populate this field.
    */
   signingWarning?: string;
 }
@@ -642,6 +647,8 @@ export interface GitFetchResult {
 }
 
 export interface GitPushOptions {
+  /** Caller assertion required for every force, lease or deletion; not host approval. */
+  confirmed?: boolean;
   /** Remote name (default: origin) */
   remote?: string;
   /** Branch name (default: current) */
@@ -742,6 +749,10 @@ export interface GitTagInfo {
 }
 
 export interface GitTagResult {
+  /** Positive cryptographic evidence, independent from native policy acceptance. */
+  cryptographicallyValid?: boolean;
+  /** Trust reported by the configured native verifier, never host authorization. */
+  trust?: 'trusted' | 'untrusted' | 'unknown';
   /** Operation mode */
   mode: string;
   /** List of tags (for list mode) */
@@ -757,9 +768,8 @@ export interface GitTagResult {
    */
   signed?: boolean;
   /**
-   * Populated only when signing was requested (`GIT_SIGN_COMMITS=true`)
-   * but failed, and creation was retried using native Git configuration.
-   * The retry may still produce a signed tag. Absent without a retry.
+   * Legacy compatibility field. Current tag creation never retries unsigned
+   * and does not populate this field.
    */
   signingWarning?: string;
   /**

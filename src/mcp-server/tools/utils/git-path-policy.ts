@@ -1,11 +1,12 @@
 /**
- * @fileoverview Lexical allowlist for Git repository and destination paths.
+ * @fileoverview Canonical Git path authorization and legacy lexical validation.
  * @module mcp-server/tools/utils/git-path-policy
  */
 import path from 'node:path';
 
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { sanitization } from '@/utils/index.js';
+import { getConfiguredRepositoryPolicy } from '@/services/git/core/configured-repository-policy.js';
 
 /** Resolve once against a fixed base; never search relative paths across roots. */
 export function resolvePathWithinGitRoots(
@@ -46,8 +47,17 @@ export function resolvePathWithinGitRoots(
 /** Apply the configured roots to a repository, local source, or destination. */
 export async function resolveGitPath(
   input: string,
-  options: { relativeTo?: string; unrestrictedRelative?: boolean } = {},
+  options: {
+    relativeTo?: string;
+    unrestrictedRelative?: boolean;
+    repositoryRoots?: readonly string[] | undefined;
+  } = {},
 ): Promise<string> {
+  if (typeof input !== 'string' || /[\uD800-\uDFFF]/u.test(input))
+    throw new McpError(
+      JsonRpcErrorCode.Forbidden,
+      'Repository boundary denied: invalid Unicode path.',
+    );
   const { config } = await import('@/config/index.js');
   const roots = config?.git?.baseDirs;
   if (!roots && !options.relativeTo && !options.unrestrictedRelative) {
@@ -56,5 +66,8 @@ export async function resolveGitPath(
       allowAbsolute: true,
     }).sanitizedPath;
   }
-  return resolvePathWithinGitRoots(input, roots, options.relativeTo);
+  return getConfiguredRepositoryPolicy(options.repositoryRoots).resolve(
+    input,
+    options.relativeTo,
+  ).path;
 }

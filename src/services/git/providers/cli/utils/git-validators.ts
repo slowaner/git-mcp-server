@@ -9,16 +9,17 @@
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { logger, type RequestContext } from '@/utils/index.js';
 
-import { executeGitCommand } from './git-executor.js';
+import { executeGitCommand, type ExecuteGitOptions } from './git-executor.js';
 
 /**
  * Validate that a directory is a git repository.
  *
- * Uses `git rev-parse --is-inside-work-tree` to check if the path
- * is within a git working directory.
+ * Uses guarded `git rev-parse --absolute-git-dir` for ordinary, bare and linked
+ * repositories after canonical metadata and effective-config authorization.
  *
  * @param path - Path to check
  * @param context - Request context for logging
+ * @param options - Server-owned controls composed with the current request scope
  * @returns Promise resolving to true if valid git repository
  * @throws {McpError} If not a git repository or path is invalid
  *
@@ -31,14 +32,16 @@ import { executeGitCommand } from './git-executor.js';
 export async function validateGitRepository(
   path: string,
   _context: RequestContext,
+  options: ExecuteGitOptions = {},
 ): Promise<boolean> {
   try {
     const result = await executeGitCommand(
-      ['rev-parse', '--is-inside-work-tree'],
+      ['rev-parse', '--absolute-git-dir'],
       path,
+      options,
     );
 
-    if (result.stdout.trim() !== 'true') {
+    if (result.stdout.replace(/\n$/, '') === '') {
       throw new McpError(
         JsonRpcErrorCode.ValidationError,
         `Not a git repository: ${path}`,

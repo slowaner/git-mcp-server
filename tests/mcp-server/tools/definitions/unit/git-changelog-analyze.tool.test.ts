@@ -2,7 +2,9 @@
  * @fileoverview Unit tests for git-changelog-analyze tool
  * @module tests/mcp-server/tools/definitions/unit/git-changelog-analyze.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitChangelogAnalyzeTool } from '@/mcp-server/tools/definitions/git-changelog-analyze.tool.js';
@@ -22,6 +24,8 @@ import {
 } from '../helpers/index.js';
 import type { GitLogResult, GitTagResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
+
+installTrustedGitFixture();
 
 describe('git_changelog_analyze tool', () => {
   const mockProvider = createMockGitProvider();
@@ -102,7 +106,7 @@ describe('git_changelog_analyze tool', () => {
 
     const tenantId = 'test-tenant';
     const context = createTestContext({ tenantId });
-    mockStorage.set(`session:workingDir:${tenantId}`, '/test/repo', context);
+    workingDirectoryStore(mockStorage, context).set('/test/repo');
 
     mockProvider.log.mockResolvedValue(mockLogResult);
     mockProvider.tag.mockResolvedValue(mockTagResult);

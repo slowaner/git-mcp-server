@@ -24,9 +24,21 @@ describe('executePush', () => {
   };
 
   let mockExecGit: ReturnType<typeof vi.fn<ExecGitFn>>;
+  let tagOutput: string;
+
+  const mockExecution: ExecGitFn = (args, cwd, ctx) => {
+    if (args[0] === 'config')
+      return Promise.resolve({ stdout: 'push.default\ncurrent\0', stderr: '' });
+    if (args[0] === 'rev-parse')
+      return Promise.resolve({ stdout: 'feature\n', stderr: '' });
+    if (args[0] === 'for-each-ref')
+      return Promise.resolve({ stdout: tagOutput, stderr: '' });
+    return mockExecGit(args, cwd, ctx);
+  };
 
   beforeEach(() => {
     mockExecGit = vi.fn<ExecGitFn>();
+    tagOutput = 'refs/tags/v1\n';
   });
 
   describe('basic push operations', () => {
@@ -36,7 +48,7 @@ describe('executePush', () => {
         stderr: 'Everything up-to-date\n',
       });
 
-      const result = await executePush({}, mockContext, mockExecGit);
+      const result = await executePush({}, mockContext, mockExecution);
 
       const [args] = mockExecGit.mock.calls[0]!;
       expect(args).toContain('push');
@@ -55,7 +67,7 @@ describe('executePush', () => {
       const result = await executePush(
         { remote: 'upstream' },
         mockContext,
-        mockExecGit,
+        mockExecution,
       );
 
       const [args] = mockExecGit.mock.calls[0]!;
@@ -72,31 +84,30 @@ describe('executePush', () => {
       const result = await executePush(
         { branch: 'feature-x' },
         mockContext,
-        mockExecGit,
+        mockExecution,
       );
 
       const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('feature-x');
+      expect(args).toContain('refs/heads/feature-x:refs/heads/feature-x');
       expect(result.branch).toBe('feature-x');
     });
   });
 
   describe('delete option', () => {
-    it('adds --delete flag when delete is true', async () => {
+    it('uses an empty source for confirmed concrete deletion', async () => {
       mockExecGit.mockResolvedValueOnce({
         stdout: '',
         stderr: '',
       });
 
       await executePush(
-        { branch: 'old-branch', delete: true },
+        { branch: 'old-branch', delete: true, confirmed: true },
         mockContext,
-        mockExecGit,
+        mockExecution,
       );
 
       const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--delete');
-      expect(args).toContain('old-branch');
+      expect(args).toContain(':refs/heads/old-branch');
     });
 
     it('does not add --delete flag when delete is falsy', async () => {
@@ -105,7 +116,7 @@ describe('executePush', () => {
         stderr: '',
       });
 
-      await executePush({ branch: 'main' }, mockContext, mockExecGit);
+      await executePush({ branch: 'main' }, mockContext, mockExecution);
 
       const [args] = mockExecGit.mock.calls[0]!;
       expect(args).not.toContain('--delete');
@@ -122,15 +133,15 @@ describe('executePush', () => {
       await executePush(
         { branch: 'local-feat', remoteBranch: 'remote-feat' },
         mockContext,
-        mockExecGit,
+        mockExecution,
       );
 
       const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('local-feat:remote-feat');
+      expect(args).toContain('refs/heads/local-feat:refs/heads/remote-feat');
       expect(args).not.toContain('local-feat');
     });
 
-    it('uses plain branch when remoteBranch matches branch', async () => {
+    it('pins an explicit destination when remoteBranch matches branch', async () => {
       mockExecGit.mockResolvedValueOnce({
         stdout: '',
         stderr: '',
@@ -139,12 +150,11 @@ describe('executePush', () => {
       await executePush(
         { branch: 'feat', remoteBranch: 'feat' },
         mockContext,
-        mockExecGit,
+        mockExecution,
       );
 
       const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('feat');
-      expect(args).not.toContain('feat:feat');
+      expect(args).toContain('refs/heads/feat:refs/heads/feat');
     });
 
     it('pushes HEAD:remote when remoteBranch is set without branch', async () => {
@@ -153,24 +163,28 @@ describe('executePush', () => {
         stderr: '',
       });
 
-      await executePush({ remoteBranch: 'deploy' }, mockContext, mockExecGit);
+      await executePush({ remoteBranch: 'deploy' }, mockContext, mockExecution);
 
       const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('HEAD:deploy');
+      expect(args).toContain('HEAD:refs/heads/deploy');
     });
   });
 
   describe('force push options', () => {
-    it('adds --force flag when force is true', async () => {
+    it('pins a confirmed force refspec when force is true', async () => {
       mockExecGit.mockResolvedValueOnce({
         stdout: '',
         stderr: '',
       });
 
-      await executePush({ force: true }, mockContext, mockExecGit);
+      await executePush(
+        { force: true, confirmed: true },
+        mockContext,
+        mockExecution,
+      );
 
       const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--force');
+      expect(args).toContain('+refs/heads/feature:refs/heads/feature');
       expect(args).not.toContain('--force-with-lease');
     });
 
@@ -180,28 +194,26 @@ describe('executePush', () => {
         stderr: '',
       });
 
-      await executePush({ forceWithLease: true }, mockContext, mockExecGit);
+      await executePush(
+        { forceWithLease: true, confirmed: true },
+        mockContext,
+        mockExecution,
+      );
 
       const [args] = mockExecGit.mock.calls[0]!;
       expect(args).toContain('--force-with-lease');
       expect(args).not.toContain('--force');
     });
 
-    it('prefers --force over --force-with-lease when both are true', async () => {
-      mockExecGit.mockResolvedValueOnce({
-        stdout: '',
-        stderr: '',
-      });
-
-      await executePush(
-        { force: true, forceWithLease: true },
-        mockContext,
-        mockExecGit,
-      );
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--force');
-      expect(args).not.toContain('--force-with-lease');
+    it('rejects contradictory force and lease assertions', async () => {
+      await expect(
+        executePush(
+          { force: true, forceWithLease: true, confirmed: true },
+          mockContext,
+          mockExecution,
+        ),
+      ).rejects.toThrow(/Choose force/);
+      expect(mockExecGit).not.toHaveBeenCalled();
     });
   });
 
@@ -216,7 +228,7 @@ describe('executePush', () => {
       const result = await executePush(
         { setUpstream: true },
         mockContext,
-        mockExecGit,
+        mockExecution,
       );
 
       const [args] = mockExecGit.mock.calls[0]!;
@@ -230,23 +242,60 @@ describe('executePush', () => {
         stderr: '',
       });
 
-      const result = await executePush({}, mockContext, mockExecGit);
+      const result = await executePush({}, mockContext, mockExecution);
 
       expect(result.upstreamSet).toBe(false);
     });
   });
 
   describe('tags option', () => {
-    it('adds --tags flag when tags is true', async () => {
+    it('returns only a truthful no-effect result after closed destination authorization', async () => {
+      tagOutput = '';
+      const authorize = vi.fn(async (_remote: string) => {});
+      const result = await executePush(
+        { tags: true, setUpstream: true },
+        mockContext,
+        mockExecution,
+        authorize,
+      );
+      expect(authorize).toHaveBeenCalledTimes(1);
+      expect(authorize).toHaveBeenCalledWith('origin');
+      expect(mockExecGit).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: true,
+        remote: 'origin',
+        branch: '',
+        upstreamSet: false,
+        pushedRefs: [],
+        rejectedRefs: [],
+      });
+    });
+    it('fails closed if the empty-selection callback is missing or rejects', async () => {
+      tagOutput = '';
+      await expect(
+        executePush({ tags: true }, mockContext, mockExecution),
+      ).rejects.toThrow(/authorization/);
+      const failure = new Error('destination denied');
+      const authorize = vi.fn(async (_remote: string) => {
+        throw failure;
+      });
+      await expect(
+        executePush({ tags: true }, mockContext, mockExecution, authorize),
+      ).rejects.toThrow(/destination denied/);
+      expect(authorize).toHaveBeenCalledTimes(1);
+      expect(authorize).toHaveBeenCalledWith('origin');
+      expect(mockExecGit).not.toHaveBeenCalled();
+    });
+    it('pins enumerated tag destinations when tags is true', async () => {
       mockExecGit.mockResolvedValueOnce({
         stdout: '',
         stderr: '',
       });
 
-      await executePush({ tags: true }, mockContext, mockExecGit);
+      await executePush({ tags: true }, mockContext, mockExecution);
 
       const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--tags');
+      expect(args).toContain('refs/tags/v1:refs/tags/v1');
     });
 
     it('does not add --tags when tags is false', async () => {
@@ -255,7 +304,7 @@ describe('executePush', () => {
         stderr: '',
       });
 
-      await executePush({ tags: false }, mockContext, mockExecGit);
+      await executePush({ tags: false }, mockContext, mockExecution);
 
       const [args] = mockExecGit.mock.calls[0]!;
       expect(args).not.toContain('--tags');
@@ -269,7 +318,7 @@ describe('executePush', () => {
         stderr: '',
       });
 
-      await executePush({ dryRun: true }, mockContext, mockExecGit);
+      await executePush({ dryRun: true }, mockContext, mockExecution);
 
       const [args] = mockExecGit.mock.calls[0]!;
       expect(args).toContain('--dry-run');
@@ -287,7 +336,7 @@ describe('executePush', () => {
       const result = await executePush(
         { branch: 'feature' },
         mockContext,
-        mockExecGit,
+        mockExecution,
       );
 
       expect(result.success).toBe(true);
@@ -304,7 +353,7 @@ describe('executePush', () => {
       const result = await executePush(
         { branch: 'main' },
         mockContext,
-        mockExecGit,
+        mockExecution,
       );
 
       expect(result.success).toBe(false);
@@ -319,7 +368,7 @@ describe('executePush', () => {
         stderr: 'Everything up-to-date\n',
       });
 
-      const result = await executePush({}, mockContext, mockExecGit);
+      const result = await executePush({}, mockContext, mockExecution);
 
       expect(result).toEqual({
         success: true,
@@ -340,7 +389,7 @@ describe('executePush', () => {
       const result = await executePush(
         { remote: 'upstream', branch: 'develop', setUpstream: true },
         mockContext,
-        mockExecGit,
+        mockExecution,
       );
 
       expect(result.remote).toBe('upstream');

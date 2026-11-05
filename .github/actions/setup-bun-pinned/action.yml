@@ -1,0 +1,18 @@
+name: Setup reviewed Bun
+description: Verify an exact Bun release archive before executing it
+runs:
+  using: composite
+  steps:
+    - name: Verify Bun 1.4.3 archive
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(uname -s)" = 'Linux'
+        test "$(uname -m)" = 'x86_64'
+        curl --fail --show-error --location --proto '=https' --tlsv1.2 \
+          https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-x64.zip \
+          --output "$RUNNER_TEMP/bun.zip"
+        echo "3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18  $RUNNER_TEMP/bun.zip" | sha256sum --check --strict
+        unzip -q "$RUNNER_TEMP/bun.zip" -d "$RUNNER_TEMP/reviewed-bun"
+        test "$("$RUNNER_TEMP/reviewed-bun/bun-linux-x64/bun" --version)" = '1.4.3'
+        echo "$RUNNER_TEMP/reviewed-bun/bun-linux-x64" >> "$GITHUB_PATH"

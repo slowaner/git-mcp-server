@@ -1,8 +1,9 @@
 /**
  * @fileoverview Pino-backed singleton logger with environment-adaptive output.
- * Implements RFC5424 level mapping, structured context, automatic trace injection via
- * OpenTelemetry, and graceful shutdown. In a serverless environment (like Cloudflare
- * Workers), it uses a lightweight console-based logger.
+ * Emits allowlisted audit events, RFC5424 severity, opaque correlation and bounded
+ * rate limiting. Raw messages, payloads and errors never enter a logging sink.
+ * Newly created log directories/files use private POSIX modes; existing log
+ * locations remain operator-owned and require private permissions and retention.
  * @module src/utils/internal/logger
  */
 import type { LevelWithSilent, Logger as PinoLogger } from 'pino';
@@ -14,7 +15,14 @@ import {
   type RequestContext,
 } from '@/utils/internal/requestContext.js';
 import { sanitization } from '@/utils/security/sanitization.js';
+import {
+  AuditLogLimiter,
+  auditEvent,
+  safeAuditRecord,
+  type SafeAuditRecord,
+} from './safe-audit.js';
 
+/** MCP severity names translated to their corresponding Pino levels. */
 export type McpLogLevel =
   | 'debug'
   | 'info'
@@ -47,6 +55,13 @@ const pinoToMcpLevelSeverity: Record<string, number> = {
 const isServerless =
   typeof process === 'undefined' || process.env.IS_SERVERLESS === 'true';
 
+/**
+ * Process-local audit logger. Level methods retain the legacy message parameter
+ * for API compatibility but emit only a finite event and safe audit record.
+ * initialize/close own transport setup, flush and limiter cleanup; logInteraction
+ * applies the identical policy to the interaction sink. Raw input logging cannot
+ * be enabled by a caller flag or an arbitrary context field.
+ */
 export class Logger {
   private static readonly instance: Logger = new Logger();
   private pinoLogger?: PinoLogger;
@@ -55,13 +70,8 @@ export class Logger {
   private currentMcpLevel: McpLogLevel = 'info';
   private transportType: 'stdio' | 'http' | undefined;
 
-  private rateLimitThreshold = 10;
   private rateLimitWindow = 60000;
-  private messageCounts = new Map<
-    string,
-    { count: number; firstSeen: number }
-  >();
-  private suppressedMessages = new Map<string, number>();
+  private auditLimiter = new AuditLogLimiter();
   private cleanupTimer?: NodeJS.Timeout;
 
   private constructor() {
@@ -82,7 +92,12 @@ export class Logger {
       level: pinoLevel,
       base: {
         env: config.environment,
-        version: config.mcpServerVersion,
+        version:
+          /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/.test(
+            config.mcpServerVersion,
+          ) && config.mcpServerVersion.length <= 80
+            ? config.mcpServerVersion
+            : 'unknown',
         pid: !isServerless ? process.pid : undefined,
       },
       redact: {
@@ -123,11 +138,11 @@ export class Logger {
           target: prettyTarget,
           options: { colorize: true, translateTime: 'yyyy-mm-dd HH:MM:ss' },
         });
-      } catch (err) {
+      } catch {
         // Only log to console if TTY to avoid polluting stderr in STDIO mode
         if (process.stderr?.isTTY) {
           console.warn(
-            `[Logger Init] Pretty transport unavailable (${err instanceof Error ? err.message : String(err)}); falling back to stdout JSON.`,
+            '[Logger Init] Pretty transport unavailable; using JSON logging.',
           );
         }
         transports.push({ target: 'pino/file', options: { destination: 1 } });
@@ -142,13 +157,14 @@ export class Logger {
     if (config.logsPath) {
       try {
         if (!fs.existsSync(config.logsPath)) {
-          fs.mkdirSync(config.logsPath, { recursive: true });
+          fs.mkdirSync(config.logsPath, { recursive: true, mode: 0o700 });
         }
         transports.push({
           level: pinoLevel,
           target: 'pino/file',
           options: {
             destination: path.join(config.logsPath, 'combined.log'),
+            mode: 0o600,
             mkdir: true,
           },
         });
@@ -157,15 +173,14 @@ export class Logger {
           target: 'pino/file',
           options: {
             destination: path.join(config.logsPath, 'error.log'),
+            mode: 0o600,
             mkdir: true,
           },
         });
-      } catch (err) {
+      } catch {
         // Only log to console if TTY to avoid polluting stderr in STDIO mode
         if (process.stderr?.isTTY) {
-          console.error(
-            `[Logger Init] Failed to configure file logging: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          console.error('[Logger Init] Failed to configure file logging.');
         }
       }
     }
@@ -178,10 +193,12 @@ export class Logger {
 
     const { default: path } = await import('path');
     return pino({
+      base: {},
       transport: {
         target: 'pino/file',
         options: {
           destination: path.join(config.logsPath, 'interactions.log'),
+          mode: 0o600,
           mkdir: true,
         },
       },
@@ -247,7 +264,8 @@ export class Logger {
       requestContextService.createRequestContext({ operation: 'loggerClose' }),
     );
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
-    this.flushSuppressedMessages();
+    delete this.cleanupTimer;
+    this.flushSuppressedMessages(true);
 
     // Wait for all pending writes to complete
     await Promise.all([
@@ -261,7 +279,7 @@ export class Logger {
               process.stderr?.isTTY &&
               this.transportType !== 'stdio'
             ) {
-              console.error('Error flushing main logger:', err);
+              console.error('Error flushing main logger.');
             }
             resolve();
           });
@@ -279,7 +297,7 @@ export class Logger {
               process.stderr?.isTTY &&
               this.transportType !== 'stdio'
             ) {
-              console.error('Error flushing interaction logger:', err);
+              console.error('Error flushing interaction logger.');
             }
             resolve();
           });
@@ -290,53 +308,31 @@ export class Logger {
     ]);
 
     this.initialized = false;
+    this.auditLimiter = new AuditLogLimiter();
   }
 
   public isInitialized(): boolean {
     return this.initialized;
   }
 
-  private isRateLimited(message: string): boolean {
-    const now = Date.now();
-    const entry = this.messageCounts.get(message);
-    if (!entry) {
-      this.messageCounts.set(message, { count: 1, firstSeen: now });
-      return false;
+  private flushSuppressedMessages(force = false): void {
+    const count = this.auditLimiter.cleanup(force ? Infinity : Date.now());
+    if (count > 0) {
+      try {
+        this.pinoLogger?.warn(
+          { ...safeAuditRecord('suppressed'), suppressedCount: count },
+          'suppressed',
+        );
+      } catch {
+        // Logging failures never justify serializing raw fallback data.
+      }
     }
-    if (now - entry.firstSeen > this.rateLimitWindow) {
-      this.messageCounts.set(message, { count: 1, firstSeen: now });
-      return false;
-    }
-    entry.count++;
-    if (entry.count > this.rateLimitThreshold) {
-      this.suppressedMessages.set(
-        message,
-        (this.suppressedMessages.get(message) || 0) + 1,
-      );
-      return true;
-    }
-    return false;
-  }
-
-  private flushSuppressedMessages(): void {
-    if (this.suppressedMessages.size === 0) return;
-    for (const [message, count] of this.suppressedMessages.entries()) {
-      this.warning(
-        `Log message suppressed ${count} times due to rate limiting.`,
-        requestContextService.createRequestContext({
-          operation: 'loggerRateLimitFlush',
-          additionalContext: { originalMessage: message },
-        }),
-      );
-    }
-    this.suppressedMessages.clear();
-    this.messageCounts.clear();
   }
 
   private log(
     level: McpLogLevel,
-    msg: string,
-    context?: RequestContext,
+    _msg: string,
+    context?: RequestContext | SafeAuditRecord,
     error?: Error,
   ): void {
     if (!this.pinoLogger || !this.initialized) return;
@@ -355,31 +351,41 @@ export class Logger {
       return;
     }
 
-    if (this.isRateLimited(msg)) return;
-
-    const logObject: Record<string, unknown> = { ...context };
-    if (error) logObject.err = pino.stdSerializers.err(error);
-
-    this.pinoLogger[pinoLevel](logObject, msg);
+    const event = auditEvent(
+      context,
+      typeof levelSeverity === 'number' && levelSeverity <= 2
+        ? 'exception'
+        : 'operation',
+    );
+    const record = safeAuditRecord(event, context, error);
+    if (!this.auditLimiter.allow(record, level)) return;
+    try {
+      this.pinoLogger[pinoLevel](record, record.event);
+    } catch {
+      // Do not pass sink errors or the original message to another sink.
+    }
   }
 
-  public debug(msg: string, context?: RequestContext): void {
+  public debug(msg: string, context?: RequestContext | SafeAuditRecord): void {
     this.log('debug', msg, context);
   }
-  public info(msg: string, context?: RequestContext): void {
+  public info(msg: string, context?: RequestContext | SafeAuditRecord): void {
     this.log('info', msg, context);
   }
-  public notice(msg: string, context?: RequestContext): void {
+  public notice(msg: string, context?: RequestContext | SafeAuditRecord): void {
     this.log('notice', msg, context);
   }
-  public warning(msg: string, context?: RequestContext): void {
+  public warning(
+    msg: string,
+    context?: RequestContext | SafeAuditRecord,
+  ): void {
     this.log('warning', msg, context);
   }
 
   public error(
     msg: string,
-    errorOrContext: Error | RequestContext,
-    context?: RequestContext,
+    errorOrContext: Error | RequestContext | SafeAuditRecord,
+    context?: RequestContext | SafeAuditRecord,
   ): void {
     const errorObj =
       errorOrContext instanceof Error ? errorOrContext : undefined;
@@ -390,8 +396,8 @@ export class Logger {
 
   public crit(
     msg: string,
-    errorOrContext: Error | RequestContext,
-    context?: RequestContext,
+    errorOrContext: Error | RequestContext | SafeAuditRecord,
+    context?: RequestContext | SafeAuditRecord,
   ): void {
     const errorObj =
       errorOrContext instanceof Error ? errorOrContext : undefined;
@@ -402,8 +408,8 @@ export class Logger {
 
   public alert(
     msg: string,
-    errorOrContext: Error | RequestContext,
-    context?: RequestContext,
+    errorOrContext: Error | RequestContext | SafeAuditRecord,
+    context?: RequestContext | SafeAuditRecord,
   ): void {
     const errorObj =
       errorOrContext instanceof Error ? errorOrContext : undefined;
@@ -414,8 +420,8 @@ export class Logger {
 
   public emerg(
     msg: string,
-    errorOrContext: Error | RequestContext,
-    context?: RequestContext,
+    errorOrContext: Error | RequestContext | SafeAuditRecord,
+    context?: RequestContext | SafeAuditRecord,
   ): void {
     const errorObj =
       errorOrContext instanceof Error ? errorOrContext : undefined;
@@ -426,25 +432,30 @@ export class Logger {
 
   public fatal(
     msg: string,
-    errorOrContext: Error | RequestContext,
-    context?: RequestContext,
+    errorOrContext: Error | RequestContext | SafeAuditRecord,
+    context?: RequestContext | SafeAuditRecord,
   ): void {
     this.emerg(msg, errorOrContext, context);
   }
 
   public logInteraction(
-    interactionName: string,
+    _interactionName: string,
     data: Record<string, unknown>,
   ): void {
-    if (!this.interactionLogger) {
-      if (!isServerless)
-        this.warning(
-          'Interaction logger not available.',
-          (data.context || {}) as RequestContext,
-        );
-      return;
+    try {
+      const context: unknown =
+        Object.getOwnPropertyDescriptor(data, 'context')?.value ?? data;
+      const record = safeAuditRecord('interaction', context);
+      if (!this.interactionLogger) {
+        if (!isServerless)
+          this.warning('Interaction logger not available.', record);
+        return;
+      }
+      if (this.auditLimiter.allow(record, 'info'))
+        this.interactionLogger.info(record, 'interaction');
+    } catch {
+      // Logging failure is not permission to expose raw data to a fallback.
     }
-    this.interactionLogger.info({ interactionName, ...data });
   }
 }
 

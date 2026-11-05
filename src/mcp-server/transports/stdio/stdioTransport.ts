@@ -19,6 +19,9 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { randomUUID } from 'node:crypto';
+import { authContext } from '../auth/lib/authContext.js';
+import { hostPrincipal } from '../auth/lib/requestIdentity.js';
 
 import {
   ErrorHandler,
@@ -67,6 +70,13 @@ export async function startStdioTransport(
       operationContext,
     );
     await server.connect(transport);
+    const onmessage = transport.onmessage;
+    const sessionId = randomUUID();
+    transport.onmessage = (message) =>
+      authContext.run(
+        { principal: hostPrincipal, sessionId, transport: 'stdio' },
+        () => onmessage?.(message),
+      );
 
     logger.info(
       'MCP Server connected and listening via stdio transport.',

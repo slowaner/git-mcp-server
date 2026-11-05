@@ -95,6 +95,9 @@ docs/** linguist-documentation
 node_modules/** linguist-vendored
 vendor/** linguist-vendored
 
+# Preserve byte-identical pinned upstream scanner configuration, including its final blank line.
+/scripts/security/gitleaks.toml whitespace=-blank-at-eof
+
 # =============================================================================
 # DIFF HANDLING
 # =============================================================================

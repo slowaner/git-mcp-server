@@ -2,7 +2,8 @@
  * @fileoverview Pins the `validateGitArgs` allow-list to what the CLI provider
  * actually emits. Every `-`-prefixed literal anywhere under
  * `src/services/git/providers/cli/` — the operations, the pre-flight
- * validators, and the provider itself — must pass the validator. A flag the
+ * validators, and the provider itself — must pass in its supported command
+ * context. Context-bound flags must still fail as standalone options. A flag the
  * provider uses but the allow-list omits is a runtime failure for that tool
  * path that mocked-`execGit` unit tests never see (2.15.2 shipped exactly that:
  * `git rev-parse --is-inside-work-tree` in the validators was never swept, so
@@ -40,6 +41,10 @@ function collectFlagLiterals(): Map<string, string[]> {
   const flags = new Map<string, string[]>();
   for (const file of listSourceFiles(OPERATIONS_DIR)) {
     if (file === ALLOW_LIST_FILE) continue; // the list itself is not an emitter
+    // This file emits fixed runtime-bootstrap argv, not Git argv. Do not grant
+    // Git's executable-config -e flag to accommodate a host-runtime switch.
+    if (file === join(OPERATIONS_DIR, 'utils', 'process-supervision.ts'))
+      continue;
     const source = stripComments(readFileSync(file, 'utf8'));
     for (const match of source.matchAll(/['"`](-{1,2}[A-Za-z][\w-]*|--)/g)) {
       const flag = match[1]!;
@@ -62,7 +67,7 @@ describe('validateGitArgs allow-list covers every flag the operations emit', () 
     const files = new Set([...flags.values()].flat());
     expect(files).toContain('utils/git-validators.ts');
     expect(files).toContain('CliGitProvider.ts');
-    expect(flags.has('--is-inside-work-tree')).toBe(true);
+    expect(flags.has('--absolute-git-dir')).toBe(true);
   });
 
   it('accepts every rev-parse probe the validators emit', () => {
@@ -99,9 +104,112 @@ describe('validateGitArgs allow-list covers every flag the operations emit', () 
   });
 
   for (const [flag, files] of [...flags.entries()].sort()) {
-    it(`accepts ${flag} (${[...new Set(files)].join(', ')})`, () => {
-      expect(() => validateGitArgs([flag])).not.toThrow();
-    });
+    if (flag === '--numstat' || flag === '--patch') {
+      it(`accepts ${flag} only in the complete untracked diff tuple`, () => {
+        // Check every occurrence; no other emitter can inherit this exception.
+        expect(files.length).toBeGreaterThan(0);
+        for (const file of files)
+          expect(file).toBe('operations/commits/diff.ts');
+        const tuple = [
+          'diff',
+          '--no-index',
+          '--numstat',
+          '-z',
+          '--patch',
+          '--',
+          '/dev/null',
+          'file.txt',
+        ];
+        expect(() => validateGitArgs(tuple)).not.toThrow();
+        for (const invalid of [
+          [flag],
+          [
+            'diff',
+            '--no-index',
+            '-z',
+            '--numstat',
+            '--patch',
+            '--',
+            '/dev/null',
+            'file.txt',
+          ],
+          [...tuple, 'extra.txt'],
+          [
+            'diff',
+            '--no-index',
+            '--numstat',
+            '-z',
+            '--patch',
+            '/dev/null',
+            'file.txt',
+          ],
+          [...tuple.slice(0, 6), 'left.txt', 'file.txt'],
+          [...tuple.slice(0, -1), '-p'],
+          ['show', ...tuple.slice(1)],
+          ['diff', '--numstat', '--patch', '--', 'file.txt'],
+          [
+            'diff',
+            '--no-index',
+            '--numstat=2',
+            '-z',
+            '--patch',
+            '--',
+            '/dev/null',
+            'file.txt',
+          ],
+          [
+            'diff',
+            '--no-index',
+            '--numstat',
+            '-z',
+            '--patch=1',
+            '--',
+            '/dev/null',
+            'file.txt',
+          ],
+        ])
+          expect(() => validateGitArgs(invalid)).toThrow(/Unsafe git flag/i);
+      });
+    } else if (flag === '--no-show-signature') {
+      it(`accepts ${flag} only with the identity-history prefix`, () => {
+        expect(files.length).toBeGreaterThan(0);
+        for (const file of files)
+          expect(file).toBe('operations/commits/log.ts');
+        const prefix = ['log', '--no-show-signature', '--format=%H'];
+        for (const valid of [
+          prefix,
+          [...prefix, '-n10'],
+          [
+            ...prefix,
+            '-n10',
+            '--skip=2',
+            '--since=2026-01-01',
+            '--until=2026-02-01',
+            '--author=Example',
+            '--grep=subject',
+            '--end-of-options',
+            'refs/heads/feature',
+            '--',
+            ':(literal)-file.txt',
+          ],
+        ])
+          expect(() => validateGitArgs(valid)).not.toThrow();
+        for (const invalid of [
+          [flag],
+          ['show', ...prefix.slice(1)],
+          ['log', '--format=%H', flag],
+          ['log', flag, '-n10'],
+          ['log', flag, '--format=%B', '-n10'],
+          ['log', `${flag}=true`, '--format=%H', '-n10'],
+          [...prefix, `${flag}=false`],
+        ])
+          expect(() => validateGitArgs(invalid)).toThrow(/Unsafe git flag/i);
+      });
+    } else {
+      it(`accepts ${flag} (${[...new Set(files)].join(', ')})`, () => {
+        expect(() => validateGitArgs([flag])).not.toThrow();
+      });
+    }
   }
 
   it('short flags emitted with an attached value are accepted', () => {

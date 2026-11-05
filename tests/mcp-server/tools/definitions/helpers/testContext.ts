@@ -3,6 +3,8 @@
  * @module tests/mcp-server/tools/definitions/helpers/testContext
  */
 import { requestContextService } from '@/utils/index.js';
+import { config } from '@/config/index.js';
+import { afterEach, beforeEach } from 'vitest';
 import type { RequestContext } from '@/utils/index.js';
 import type { SdkContext } from '@/mcp-server/tools/utils/toolDefinition.js';
 
@@ -15,6 +17,22 @@ export function createTestContext(
   return requestContextService.createRequestContext({
     operation: overrides.operation || 'test-operation',
     additionalContext: overrides,
+  });
+}
+
+/**
+ * Explicitly opt a serial unit-test file into trusted mock-provider execution.
+ * Call at file scope; importing this helper never changes the profile. Register
+ * hooks per caller so module caching cannot hide fixture lifecycle ownership.
+ */
+export function installTrustedGitFixture(): void {
+  let savedProfile = config.git.executionProfile;
+  beforeEach(() => {
+    savedProfile = config.git.executionProfile;
+    config.git.executionProfile = 'trusted';
+  });
+  afterEach(() => {
+    config.git.executionProfile = savedProfile;
   });
 }
 

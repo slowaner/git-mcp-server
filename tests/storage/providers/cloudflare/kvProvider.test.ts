@@ -3,6 +3,10 @@
  * @module tests/storage/providers/cloudflare/kvProvider.test
  */
 import { McpError } from '../../../../src/types-global/errors.js';
+import {
+  encodeStorageKey,
+  storageTenantPrefix,
+} from '@/storage/core/storageKeyCodec.js';
 import { KvProvider } from '../../../../src/storage/providers/cloudflare/kvProvider.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RequestContext } from '../../../../src/utils/index.js';
@@ -34,7 +38,10 @@ describe('KvProvider', () => {
       mockKv.get.mockResolvedValue(null);
       const result = await kvProvider.get('tenant-1', 'key-1', context);
       expect(result).toBeNull();
-      expect(mockKv.get).toHaveBeenCalledWith('tenant-1:key-1', 'json');
+      expect(mockKv.get).toHaveBeenCalledWith(
+        encodeStorageKey('tenant-1', 'key-1'),
+        'json',
+      );
     });
 
     it('should return parsed JSON object if found', async () => {
@@ -63,7 +70,7 @@ describe('KvProvider', () => {
       const value = { data: 'test-data' };
       await kvProvider.set('tenant-1', 'key-1', value, context);
       expect(mockKv.put).toHaveBeenCalledWith(
-        'tenant-1:key-1',
+        encodeStorageKey('tenant-1', 'key-1'),
         JSON.stringify(value),
         { expirationTtl: undefined },
       );
@@ -73,7 +80,7 @@ describe('KvProvider', () => {
       const value = { data: 'test' };
       await kvProvider.set('tenant-1', 'key-1', value, context, { ttl: 3600 });
       expect(mockKv.put).toHaveBeenCalledWith(
-        'tenant-1:key-1',
+        encodeStorageKey('tenant-1', 'key-1'),
         JSON.stringify(value),
         { expirationTtl: 3600 },
       );
@@ -92,7 +99,9 @@ describe('KvProvider', () => {
       mockKv.get.mockResolvedValue('some value');
       const result = await kvProvider.delete('tenant-1', 'key-1', context);
       expect(result).toBe(true);
-      expect(mockKv.delete).toHaveBeenCalledWith('tenant-1:key-1');
+      expect(mockKv.delete).toHaveBeenCalledWith(
+        encodeStorageKey('tenant-1', 'key-1'),
+      );
     });
   });
 
@@ -100,18 +109,17 @@ describe('KvProvider', () => {
     it('should return a list of keys with tenant prefix stripped', async () => {
       mockKv.list.mockResolvedValue({
         keys: [
-          { name: 'tenant-1:key-1' },
-          { name: 'tenant-1:key-2' },
-          { name: 'unrelated-key' },
+          { name: encodeStorageKey('tenant-1', 'key-1') },
+          { name: encodeStorageKey('tenant-1', 'key-2') },
         ],
         list_complete: true,
       });
       const result = await kvProvider.list('tenant-1', 'key', context);
-      expect(result.keys).toEqual(['key-1', 'key-2', 'unrelated-key']);
+      expect(result.keys).toEqual(['key-1', 'key-2']);
       expect(result.nextCursor).toBeUndefined();
       expect(mockKv.list).toHaveBeenCalledWith(
         expect.objectContaining({
-          prefix: 'tenant-1:key',
+          prefix: encodeStorageKey('tenant-1', 'key'),
           limit: 1000,
         }),
       );
@@ -119,7 +127,7 @@ describe('KvProvider', () => {
 
     it('should forward cursors when Cloudflare pagination continues', async () => {
       mockKv.list.mockResolvedValue({
-        keys: [{ name: 'tenant-1:page-1' }],
+        keys: [{ name: encodeStorageKey('tenant-1', 'page-1') }],
         list_complete: false,
         cursor: 'next-cursor',
       });
@@ -133,7 +141,7 @@ describe('KvProvider', () => {
       expect(result.nextCursor).toBe('next-cursor');
       expect(mockKv.list).toHaveBeenCalledWith(
         expect.objectContaining({
-          prefix: 'tenant-1:page',
+          prefix: encodeStorageKey('tenant-1', 'page'),
           limit: 5,
           cursor: 'prev-cursor',
         }),
@@ -174,12 +182,12 @@ describe('KvProvider', () => {
 
       expect(mockKv.put).toHaveBeenCalledTimes(2);
       expect(mockKv.put).toHaveBeenCalledWith(
-        'tenant-1:k1',
+        encodeStorageKey('tenant-1', 'k1'),
         JSON.stringify({ foo: 'bar' }),
         { expirationTtl: 120 },
       );
       expect(mockKv.put).toHaveBeenCalledWith(
-        'tenant-1:k2',
+        encodeStorageKey('tenant-1', 'k2'),
         JSON.stringify({ baz: 2 }),
         { expirationTtl: 120 },
       );
@@ -205,12 +213,15 @@ describe('KvProvider', () => {
     it('clear should iterate through pages and delete all keys', async () => {
       mockKv.list
         .mockResolvedValueOnce({
-          keys: [{ name: 'tenant-1:k1' }, { name: 'tenant-1:k2' }],
+          keys: [
+            { name: encodeStorageKey('tenant-1', 'k1') },
+            { name: encodeStorageKey('tenant-1', 'k2') },
+          ],
           list_complete: false,
           cursor: 'cursor-1',
         })
         .mockResolvedValueOnce({
-          keys: [{ name: 'tenant-1:k3' }],
+          keys: [{ name: encodeStorageKey('tenant-1', 'k3') }],
           list_complete: true,
         });
 
@@ -221,11 +232,11 @@ describe('KvProvider', () => {
       expect(cleared).toBe(3);
       expect(mockKv.delete).toHaveBeenCalledTimes(3);
       expect(mockKv.list).toHaveBeenNthCalledWith(1, {
-        prefix: 'tenant-1:',
+        prefix: storageTenantPrefix('tenant-1'),
         limit: 1000,
       });
       expect(mockKv.list).toHaveBeenNthCalledWith(2, {
-        prefix: 'tenant-1:',
+        prefix: storageTenantPrefix('tenant-1'),
         limit: 1000,
         cursor: 'cursor-1',
       });

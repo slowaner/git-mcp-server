@@ -2,7 +2,9 @@
  * @fileoverview Unit tests for git-clear-working-dir tool
  * @module tests/mcp-server/tools/definitions/unit/git-clear-working-dir.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitClearWorkingDirTool } from '@/mcp-server/tools/definitions/git-clear-working-dir.tool.js';
@@ -20,6 +22,8 @@ import {
   assertLlmFriendlyFormat,
 } from '../helpers/index.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
+
+installTrustedGitFixture();
 
 describe('git_clear_working_dir tool', () => {
   const mockProvider = createMockGitProvider();
@@ -39,7 +43,7 @@ describe('git_clear_working_dir tool', () => {
     // Set up a working directory to clear
     const tenantId = 'test-tenant';
     const context = createTestContext({ tenantId });
-    mockStorage.set(`session:workingDir:${tenantId}`, '/test/repo', context);
+    workingDirectoryStore(mockStorage, context).set('/test/repo');
   });
 
   describe('Input Schema', () => {
@@ -117,17 +121,17 @@ describe('git_clear_working_dir tool', () => {
       expect(result.message).toContain('/test/repo');
 
       // Verify storage was cleared
-      const storedPath = await mockStorage.get<string>(
-        'session:workingDir:test-tenant',
+      const storedPath = await workingDirectoryStore(
+        mockStorage,
         appContext,
-      );
+      ).get();
       expect(storedPath).toBeNull();
     });
 
     it('handles case when no working directory was set', async () => {
       // Clear the pre-set working directory first
       const clearContext = createTestContext({ tenantId: 'test-tenant' });
-      await mockStorage.delete('session:workingDir:test-tenant', clearContext);
+      await workingDirectoryStore(mockStorage, clearContext).clear();
 
       const parsedInput = gitClearWorkingDirTool.inputSchema.parse({
         confirm: 'Y',
@@ -149,10 +153,8 @@ describe('git_clear_working_dir tool', () => {
     it('applies graceful tenantId default when missing', async () => {
       // Set working dir for default tenant
       const defaultContext = createTestContext();
-      await mockStorage.set(
-        'session:workingDir:default-tenant',
+      await workingDirectoryStore(mockStorage, defaultContext).set(
         '/default/repo',
-        defaultContext,
       );
 
       const parsedInput = gitClearWorkingDirTool.inputSchema.parse({
@@ -171,10 +173,10 @@ describe('git_clear_working_dir tool', () => {
       expect(result.previousPath).toBe('/default/repo');
 
       // Verify it was cleared
-      const storedPath = await mockStorage.get<string>(
-        'session:workingDir:default-tenant',
+      const storedPath = await workingDirectoryStore(
+        mockStorage,
         appContext,
-      );
+      ).get();
       expect(storedPath).toBeNull();
     });
   });

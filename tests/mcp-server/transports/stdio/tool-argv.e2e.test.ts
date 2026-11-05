@@ -104,6 +104,16 @@ describe('stdio transport: every tool runs through the real argument validator',
     git(['init', '-q', '--bare', remoteDir], root);
 
     const env = { ...(process.env as Record<string, string>) };
+    writeFileSync(
+      join(root, '.gitconfig'),
+      '[user]\n name = Argv Fixture\n email = argv@example.invalid\n[commit]\n gpgsign = false\n[tag]\n gpgsign = false\n',
+    );
+    Object.assign(env, {
+      GIT_EXECUTION_PROFILE: 'trusted',
+      GIT_BINARY_PATH: '/usr/bin/git',
+      GIT_TRUSTED_HOME: root,
+      GIT_TRUSTED_PATH: '/usr/bin:/bin',
+    });
     delete env.GIT_BASE_DIR;
     // Signing defaults to on; the runner has no key and this suite tests argv, not signing.
     env.GIT_SIGN_COMMITS = 'false';

@@ -2,7 +2,9 @@
  * @fileoverview Unit tests for git-cherry-pick tool
  * @module tests/mcp-server/tools/definitions/unit/git-cherry-pick.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitCherryPickTool } from '@/mcp-server/tools/definitions/git-cherry-pick.tool.js';
@@ -24,6 +26,8 @@ import {
 import type { GitCherryPickResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
 
+installTrustedGitFixture();
+
 describe('git_cherry_pick tool', () => {
   const mockProvider = createMockGitProvider();
   const mockStorage = createMockStorageService();
@@ -41,7 +45,7 @@ describe('git_cherry_pick tool', () => {
 
     const tenantId = 'test-tenant';
     const context = createTestContext({ tenantId });
-    mockStorage.set(`session:workingDir:${tenantId}`, '/test/repo', context);
+    workingDirectoryStore(mockStorage, context).set('/test/repo');
   });
 
   describe('Input Schema', () => {

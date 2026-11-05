@@ -6,11 +6,10 @@
  * @module src/utils/telemetry/instrumentation
  */
 import { config } from '@/config/index.js';
-import { DiagConsoleLogger, DiagLogLevel, diag } from '@opentelemetry/api';
+import { DiagLogLevel, diag } from '@opentelemetry/api';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { PinoInstrumentation } from '@opentelemetry/instrumentation-pino';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { NodeSDK } from '@opentelemetry/sdk-node';
@@ -23,6 +22,9 @@ import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
 } from '@opentelemetry/semantic-conventions/incubating';
+import { SafeSpanExporter } from './safe-span-exporter.js';
+import { safeDiagnosticLogger } from './safe-diagnostics.js';
+import { SafeMetricExporter, safeMetricViews } from './safe-metric-exporter.js';
 
 export let sdk: NodeSDK | null = null;
 
@@ -36,7 +38,7 @@ if (config.openTelemetry.enabled && !isOtelInitialized) {
     const otelLogLevelString =
       config.openTelemetry.logLevel.toUpperCase() as keyof typeof DiagLogLevel;
     const otelLogLevel = DiagLogLevel[otelLogLevelString] ?? DiagLogLevel.INFO;
-    diag.setLogger(new DiagConsoleLogger(), otelLogLevel);
+    diag.setLogger(safeDiagnosticLogger(), otelLogLevel);
 
     const tracesEndpoint = config.openTelemetry.tracesEndpoint;
     const metricsEndpoint = config.openTelemetry.metricsEndpoint;
@@ -48,16 +50,23 @@ if (config.openTelemetry.enabled && !isOtelInitialized) {
     }
 
     const resource = resourceFromAttributes({
-      [ATTR_SERVICE_NAME]: config.openTelemetry.serviceName,
-      [ATTR_SERVICE_VERSION]: config.openTelemetry.serviceVersion,
+      [ATTR_SERVICE_NAME]: 'git-mcp-server',
+      [ATTR_SERVICE_VERSION]:
+        /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/.test(
+          config.openTelemetry.serviceVersion,
+        ) && config.openTelemetry.serviceVersion.length <= 80
+          ? config.openTelemetry.serviceVersion
+          : 'unknown',
       'deployment.environment.name': config.environment,
     });
 
     const spanProcessors: SpanProcessor[] = [];
     if (tracesEndpoint) {
-      diag.info(`Using OTLP exporter for traces, endpoint: ${tracesEndpoint}`);
+      diag.info('Using configured OTLP trace exporter.');
       const traceExporter = new OTLPTraceExporter({ url: tracesEndpoint });
-      spanProcessors.push(new BatchSpanProcessor(traceExporter));
+      spanProcessors.push(
+        new BatchSpanProcessor(new SafeSpanExporter(traceExporter)),
+      );
     } else {
       diag.info(
         'No OTLP traces endpoint configured. Traces will not be exported.',
@@ -66,15 +75,19 @@ if (config.openTelemetry.enabled && !isOtelInitialized) {
 
     const metricReader = metricsEndpoint
       ? new PeriodicExportingMetricReader({
-          exporter: new OTLPMetricExporter({ url: metricsEndpoint }),
+          exporter: new SafeMetricExporter(
+            new OTLPMetricExporter({ url: metricsEndpoint }),
+          ),
           exportIntervalMillis: 15000,
         })
       : undefined;
 
     sdk = new NodeSDK({
       resource,
+      autoDetectResources: false,
+      views: safeMetricViews(),
       spanProcessors,
-      ...(metricReader && { metricReader }),
+      metricReaders: metricReader ? [metricReader] : [],
       sampler: new TraceIdRatioBasedSampler(config.openTelemetry.samplingRatio),
       instrumentations: [
         getNodeAutoInstrumentations({
@@ -83,22 +96,15 @@ if (config.openTelemetry.enabled && !isOtelInitialized) {
             ignoreIncomingRequestHook: (req) => req.url === '/healthz',
           },
           '@opentelemetry/instrumentation-fs': { enabled: false },
-        }),
-        new PinoInstrumentation({
-          logHook: (_span, record) => {
-            record['trace_id'] = _span.spanContext().traceId;
-            record['span_id'] = _span.spanContext().spanId;
-          },
+          '@opentelemetry/instrumentation-pino': { enabled: false },
         }),
       ],
     });
 
     sdk.start();
-    diag.info(
-      `OpenTelemetry initialized for ${config.openTelemetry.serviceName} v${config.openTelemetry.serviceVersion}`,
-    );
-  } catch (error) {
-    diag.error('Error initializing OpenTelemetry', error);
+    diag.info('OpenTelemetry initialized.');
+  } catch {
+    diag.error('Error initializing OpenTelemetry.');
     sdk = null;
   }
 }
@@ -112,8 +118,8 @@ export async function shutdownOpenTelemetry() {
     try {
       await sdk.shutdown();
       diag.info('OpenTelemetry terminated successfully.');
-    } catch (error) {
-      diag.error('Error terminating OpenTelemetry', error);
+    } catch {
+      diag.error('Error terminating OpenTelemetry.');
     }
   }
 }

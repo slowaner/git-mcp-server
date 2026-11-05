@@ -6,9 +6,11 @@
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
-import { generateUUID, sanitizeInputForLogging } from '@/utils/index.js';
 import { logger } from '@/utils/internal/logger.js';
-import type { RequestContext } from '@/utils/internal/requestContext.js';
+import {
+  safeAuditException,
+  safeAuditRecord,
+} from '@/utils/internal/safe-audit.js';
 
 import { COMMON_ERROR_PATTERNS, ERROR_TYPE_MAPPINGS } from './mappings.js';
 import { createSafeRegex, getErrorMessage, getErrorName } from './helpers.js';
@@ -58,7 +60,7 @@ export class ErrorHandler {
 
   /**
    * Handles an error with consistent logging and optional transformation.
-   * Sanitizes input, determines error code, logs details, and can rethrow.
+   * Determines the error code, emits a payload-free audit record, and can rethrow.
    * @param error - The error instance or value that occurred.
    * @param options - Configuration for handling the error.
    * @returns The handled (and potentially transformed) error instance.
@@ -70,29 +72,19 @@ export class ErrorHandler {
     // --- OpenTelemetry Integration ---
     const activeSpan = trace.getActiveSpan();
     if (activeSpan) {
-      if (error instanceof Error) {
-        activeSpan.recordException(error);
-      }
-      activeSpan.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      activeSpan.recordException(safeAuditException(error));
+      activeSpan.setStatus({ code: SpanStatusCode.ERROR });
     }
     // --- End OpenTelemetry Integration ---
 
     const {
       context = {},
       operation,
-      input,
       rethrow = false,
       errorCode: explicitErrorCode,
-      includeStack = true,
-      critical = false,
       errorMapper,
     } = options;
 
-    const sanitizedInput =
-      input !== undefined ? sanitizeInputForLogging(input) : undefined;
     const originalErrorName = getErrorName(error);
     const originalErrorMessage = getErrorMessage(error);
     const originalStack = error instanceof Error ? error.stack : undefined;
@@ -169,42 +161,16 @@ export class ErrorHandler {
       finalError.stack = error.stack;
     }
 
-    const logRequestId =
-      typeof context.requestId === 'string' && context.requestId
-        ? context.requestId
-        : generateUUID();
-
-    const logTimestamp =
-      typeof context.timestamp === 'string' && context.timestamp
-        ? context.timestamp
-        : new Date().toISOString();
-
-    const stack =
-      finalError instanceof Error ? finalError.stack : originalStack;
-    const logContext: RequestContext = {
-      requestId: logRequestId,
-      timestamp: logTimestamp,
-      operation,
-      input: sanitizedInput,
-      critical,
-      errorCode: loggedErrorCode,
-      originalErrorType: originalErrorName,
-      finalErrorType: getErrorName(finalError),
-      ...Object.fromEntries(
-        Object.entries(context).filter(
-          ([key]) => key !== 'requestId' && key !== 'timestamp',
-        ),
-      ),
-      errorData:
-        finalError instanceof McpError && finalError.data
-          ? finalError.data
-          : consolidatedData,
-      ...(includeStack && stack ? { stack } : {}),
-    };
-
     logger.error(
-      `Error in ${operation}: ${finalError.message || originalErrorMessage}`,
-      logContext,
+      'Operation failed.',
+      safeAuditRecord(
+        loggedErrorCode === JsonRpcErrorCode.Forbidden ||
+          loggedErrorCode === JsonRpcErrorCode.Unauthorized
+          ? 'denied'
+          : 'exception',
+        context,
+        { code: loggedErrorCode },
+      ),
     );
 
     if (rethrow) {
@@ -245,7 +211,7 @@ export class ErrorHandler {
   }
 
   /**
-   * Formats an error into a consistent object structure for API responses or structured logging.
+   * Formats an error for API responses. Logging must use the safe audit schema.
    * @param error - The error instance or value to format.
    * @returns A structured representation of the error.
    */

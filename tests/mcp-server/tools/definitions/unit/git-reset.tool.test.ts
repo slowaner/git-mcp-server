@@ -2,7 +2,9 @@
  * @fileoverview Unit tests for git-reset tool
  * @module tests/mcp-server/tools/definitions/unit/git-reset.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitResetTool } from '@/mcp-server/tools/definitions/git-reset.tool.js';
@@ -24,6 +26,8 @@ import {
 import type { GitResetResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
 
+installTrustedGitFixture();
+
 describe('git_reset tool', () => {
   const mockProvider = createMockGitProvider();
   const mockStorage = createMockStorageService();
@@ -41,7 +45,7 @@ describe('git_reset tool', () => {
 
     const tenantId = 'test-tenant';
     const context = createTestContext({ tenantId });
-    mockStorage.set(`session:workingDir:${tenantId}`, '/test/repo', context);
+    workingDirectoryStore(mockStorage, context).set('/test/repo');
   });
 
   describe('Input Schema', () => {
@@ -137,6 +141,7 @@ describe('git_reset tool', () => {
         path: '/absolute/repo/path',
         mode: 'hard',
         target: 'abc123',
+        confirmed: true,
       });
       const appContext = createTestContext({ tenantId: 'test-tenant' });
       const sdkContext = createTestSdkContext();
@@ -180,6 +185,42 @@ describe('git_reset tool', () => {
       expect(options.commit).toBe('HEAD~2');
       expect(options.paths).toEqual(['src/index.ts']);
     });
+  });
+
+  describe('destructive confirmation', () => {
+    it('rejects an empty explicit path selection before reset', async () => {
+      const input = gitResetTool.inputSchema.parse({
+        path: '.',
+        paths: [],
+        confirmed: true,
+        mode: 'hard',
+      });
+      await expect(
+        gitResetTool.logic(
+          input,
+          createTestContext({ tenantId: 'test-tenant' }),
+          createTestSdkContext(),
+        ),
+      ).rejects.toThrow(/must not be empty/);
+      expect(mockProvider.reset).not.toHaveBeenCalled();
+    });
+    for (const mode of ['hard', 'merge', 'keep'] as const) {
+      it(
+        'denies unconfirmed ' + mode + ' without a branch/status dependency',
+        async () => {
+          const input = gitResetTool.inputSchema.parse({ path: '.', mode });
+          await expect(
+            gitResetTool.logic(
+              input,
+              createTestContext({ tenantId: 'test-tenant' }),
+              createTestSdkContext(),
+            ),
+          ).rejects.toThrow(/every branch and detached HEAD/);
+          expect(mockProvider.reset).not.toHaveBeenCalled();
+          expect(mockProvider.status).not.toHaveBeenCalled();
+        },
+      );
+    }
   });
 
   describe('Response Formatter', () => {

@@ -1,598 +1,213 @@
 /**
- * @fileoverview Unit tests for git log operation
+ * @fileoverview History options and immutable record-boundary regressions.
  * @module tests/services/git/providers/cli/operations/commits/log.test
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-
 import { executeLog } from '@/services/git/providers/cli/operations/commits/log.js';
-import type { GitOperationContext } from '@/services/git/types.js';
+import { validateGitArgs } from '@/services/git/providers/cli/utils/command-builder.js';
+import { commitFixture } from '../../../../../../security/helpers/git-object-fixture.js';
+import type {
+  GitLogOptions,
+  GitOperationContext,
+} from '@/services/git/types.js';
 import type { RequestContext } from '@/utils/index.js';
 
-type ExecGitFn = (
-  args: string[],
-  cwd: string,
-  ctx: RequestContext,
-) => Promise<{ stdout: string; stderr: string }>;
-
-// The delimiters used in the log parsing (must match output-parser.ts)
-const FIELD_DELIMITER = '\x1F'; // ASCII Unit Separator (same as GIT_FIELD_DELIMITER)
-const COMMIT_START = '<<<COMMIT_START>>>';
-const COMMIT_END = '<<<COMMIT_END>>>';
-
-/**
- * Helper to build mock git log output with proper markers
- */
-function buildLogOutput(
-  commits: Array<{
-    hash: string;
-    shortHash: string;
-    author: string;
-    email: string;
-    timestamp: number;
-    subject: string;
-    body?: string;
-    parents?: string;
-    stat?: string;
-    patch?: string;
-  }>,
-): string {
-  return commits
-    .map((c) => {
-      const fields = [
-        c.hash,
-        c.shortHash,
-        c.author,
-        c.email,
-        c.timestamp.toString(),
-        c.subject,
-        c.body || '',
-        c.parents || '',
-      ].join(FIELD_DELIMITER);
-
-      let extra = '';
-      if (c.stat && c.patch) {
-        extra = `\n${c.stat}\ndiff --git ${c.patch}`;
-      } else if (c.stat) {
-        extra = `\n${c.stat}`;
-      } else if (c.patch) {
-        extra = `\n${c.patch}`;
-      }
-
-      return `${COMMIT_START}${fields}${COMMIT_END}${extra}`;
-    })
-    .join('\n');
-}
-
 describe('executeLog', () => {
-  const mockContext: GitOperationContext = {
-    workingDirectory: '/test/repo',
-    requestContext: {
-      requestId: 'test-request-id',
-    } as RequestContext,
-    tenantId: 'test-tenant',
+  const context: GitOperationContext = {
+    workingDirectory: '/fixture/repository',
+    requestContext: { requestId: 'fixture' } as RequestContext,
   };
-
-  let mockExecGit: ReturnType<typeof vi.fn<ExecGitFn>>;
-
+  let objects: ReturnType<typeof commitFixture>[];
+  let stat: string, patch: string;
+  const calls: string[][] = [];
+  const execute = vi.fn(async (args: string[]) => {
+    calls.push(args);
+    if (args[0] === 'log')
+      return {
+        stdout: objects.map((object) => object.id + '\n').join(''),
+        stderr: '',
+      };
+    if (args[0] === 'cat-file') {
+      const object = objects.find((object) => object.id === args[2]);
+      if (!object) throw new Error('Unknown fixture object');
+      return { stdout: object.raw, stderr: '' };
+    }
+    return { stdout: args.includes('--stat') ? stat : patch, stderr: '' };
+  });
+  const run = (options: GitLogOptions = {}) =>
+    executeLog(options, context, execute);
   beforeEach(() => {
-    mockExecGit = vi.fn<ExecGitFn>();
+    objects = [commitFixture()];
+    calls.length = 0;
+    execute.mockClear();
+    stat = ' one | 1 +\n 1 file changed, 1 insertion(+)\n';
+    patch = 'diff --git a/one b/one\n+<<<COMMIT_START>>>\0<<<COMMIT_END>>>\n';
   });
 
-  describe('basic log operations', () => {
-    it('returns empty commits array for empty repository', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      const result = await executeLog({}, mockContext, mockExecGit);
-
-      expect(result.commits).toEqual([]);
-      expect(result.totalCount).toBe(0);
-    });
-
-    it('parses single commit correctly', async () => {
-      const output = buildLogOutput([
-        {
-          hash: 'abc123def456789',
-          shortHash: 'abc123d',
-          author: 'John Doe',
-          email: 'john@example.com',
-          timestamp: 1609459200,
-          subject: 'Initial commit',
-          body: 'This is the body',
-          parents: '',
-        },
-      ]);
-
-      mockExecGit.mockResolvedValueOnce({ stdout: output, stderr: '' });
-
-      const result = await executeLog({}, mockContext, mockExecGit);
-
-      expect(result.commits).toHaveLength(1);
-      expect(result.totalCount).toBe(1);
-
-      const commit = result.commits[0]!;
-      expect(commit.hash).toBe('abc123def456789');
-      expect(commit.shortHash).toBe('abc123d');
-      expect(commit.author).toBe('John Doe');
-      expect(commit.authorEmail).toBe('john@example.com');
-      expect(commit.timestamp).toBe(1609459200);
-      expect(commit.subject).toBe('Initial commit');
-      expect(commit.body).toBe('This is the body');
-      expect(commit.parents).toEqual([]);
-    });
-
-    it('parses multiple commits correctly', async () => {
-      const output = buildLogOutput([
-        {
-          hash: 'commit1hash',
-          shortHash: 'commit1',
-          author: 'Author 1',
-          email: 'a1@test.com',
-          timestamp: 1000,
-          subject: 'First',
-          parents: '',
-        },
-        {
-          hash: 'commit2hash',
-          shortHash: 'commit2',
-          author: 'Author 2',
-          email: 'a2@test.com',
-          timestamp: 2000,
-          subject: 'Second',
-          parents: 'commit1hash',
-        },
-        {
-          hash: 'commit3hash',
-          shortHash: 'commit3',
-          author: 'Author 3',
-          email: 'a3@test.com',
-          timestamp: 3000,
-          subject: 'Third',
-          parents: 'commit2hash',
-        },
-      ]);
-
-      mockExecGit.mockResolvedValueOnce({ stdout: output, stderr: '' });
-
-      const result = await executeLog({}, mockContext, mockExecGit);
-
-      expect(result.commits).toHaveLength(3);
-      expect(result.totalCount).toBe(3);
-      expect(result.commits[0]!.subject).toBe('First');
-      expect(result.commits[1]!.subject).toBe('Second');
-      expect(result.commits[2]!.subject).toBe('Third');
-    });
-
-    it('parses merge commits with multiple parents', async () => {
-      const output = buildLogOutput([
-        {
-          hash: 'mergecommit',
-          shortHash: 'merge',
-          author: 'Merger',
-          email: 'merger@test.com',
-          timestamp: 1000,
-          subject: 'Merge branch feature',
-          parents: 'parent1 parent2',
-        },
-      ]);
-
-      mockExecGit.mockResolvedValueOnce({ stdout: output, stderr: '' });
-
-      const result = await executeLog({}, mockContext, mockExecGit);
-
-      expect(result.commits[0]!.parents).toEqual(['parent1', 'parent2']);
+  it('returns empty history without object reads', async () => {
+    objects = [];
+    expect(await run()).toEqual({ commits: [], totalCount: 0 });
+    expect(calls).toHaveLength(1);
+  });
+  it('admits signature suppression only for the fixed identity-only history producer', async () => {
+    await run({ maxCount: 1 });
+    expect(calls[0]!.slice(0, 4)).toEqual([
+      'log',
+      '--no-show-signature',
+      '--format=%H',
+      '-n1',
+    ]);
+    expect(() => validateGitArgs(calls[0]!)).not.toThrow();
+    expect(() =>
+      validateGitArgs(['show', '--no-show-signature', '--format=%H']),
+    ).toThrow();
+    expect(() =>
+      validateGitArgs(['log', '--no-show-signature', '--format=%s']),
+    ).toThrow();
+  });
+  it('preserves hash, short hash, author, email, timestamp, subject, body and parents', async () => {
+    const result = await run();
+    expect(result.totalCount).toBe(1);
+    expect(result.commits[0]).toEqual({
+      hash: objects[0]!.id,
+      shortHash: objects[0]!.id.slice(0, 7),
+      author: 'Fixture Author',
+      authorEmail: 'fixture@example.invalid',
+      timestamp: 1700000000,
+      subject: 'subject',
+      body: 'body\n',
+      parents: [],
     });
   });
-
-  describe('maxCount option', () => {
-    it('adds -n flag with maxCount value', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ maxCount: 10 }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('-n10');
+  it('preserves multiple records in native enumeration order', async () => {
+    objects.push(commitFixture({ message: 'second\n', timestamp: 1700000001 }));
+    expect((await run()).commits.map((commit) => commit.hash)).toEqual(
+      objects.map((object) => object.id),
+    );
+  });
+  it('preserves both independently validated merge parent identities', async () => {
+    objects = [commitFixture({ parents: ['1'.repeat(40), '2'.repeat(40)] })];
+    expect((await run()).commits[0]!.parents).toEqual([
+      '1'.repeat(40),
+      '2'.repeat(40),
+    ]);
+  });
+  for (const [options, flags] of [
+    [{ maxCount: 10 }, ['-n10']],
+    [{ maxCount: 1 }, ['-n1']],
+    [{ skip: 5 }, ['--skip=5']],
+    [{ skip: 10, maxCount: 5 }, ['--skip=10', '-n5']],
+    [{ since: '2024-01-01' }, ['--since=2024-01-01']],
+    [{ until: '2024-12-31' }, ['--until=2024-12-31']],
+    [
+      { since: '2024-01-01', until: '2024-12-31' },
+      ['--since=2024-01-01', '--until=2024-12-31'],
+    ],
+    [{ author: 'Fixture Author' }, ['--author=Fixture Author']],
+    [{ author: '@example.invalid' }, ['--author=@example.invalid']],
+    [{ grep: 'fix:' }, ['--grep=fix:']],
+    [{ branch: 'develop' }, ['--end-of-options', 'develop']],
+  ] as [GitLogOptions, string[]][])
+    it('preserves filters ' + JSON.stringify(options), async () => {
+      await run(options);
+      for (const flag of flags) expect(calls[0]).toContain(flag);
+      expect(calls[0]).toContain('--format=%H');
     });
-
-    it('limits to single commit with maxCount 1', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ maxCount: 1 }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('-n1');
+  it('uses literal option-separated paths, including native-magic-looking names', async () => {
+    await run({ path: ':(glob)*' });
+    expect(calls[0]!.slice(-2)).toEqual(['--', ':(literal):(glob)*']);
+  });
+  it('pins stat to the enumerated immutable commit and preserves it opaquely', async () => {
+    const result = await run({ stat: true });
+    expect(result.commits[0]!.stat).toBe(stat);
+    expect(calls[2]).toEqual(['show', '--format=', '--stat', objects[0]!.id]);
+  });
+  it('omits empty stat content for commits without changed files', async () => {
+    stat = '';
+    expect((await run({ stat: true })).commits[0]!.stat).toBeUndefined();
+  });
+  it('pins patch to one immutable commit without marker parsing', async () => {
+    const result = await run({ patch: true });
+    expect(result.commits[0]!.patch).toBe(patch);
+    expect(calls[2]).toEqual(['show', '--format=', '-p', objects[0]!.id]);
+  });
+  it('returns stat and patch separately without searching a diff header', async () => {
+    const result = await run({ stat: true, patch: true });
+    expect(result.commits[0]!.stat).toBe(stat);
+    expect(result.commits[0]!.patch).toBe(patch);
+    expect(calls[2]).toContain('--stat');
+    expect(calls[3]).toContain('-p');
+  });
+  for (const message of [
+    'subject\n\nline one\nline two\n',
+    'feat: "quotes" & <special> $var\n\n<<<COMMIT_START>>>\x1f\x1e<<<COMMIT_END>>>\n',
+  ])
+    it(
+      'preserves exact body bytes and cannot create records from message ' +
+        JSON.stringify(message),
+      async () => {
+        objects = [commitFixture({ message })];
+        const result = await run();
+        expect(result.totalCount).toBe(1);
+        expect(result.commits[0]!.body).toBe(
+          message.split('\n\n').slice(1).join('\n\n'),
+        );
+        expect(result.commits[0]!.hash).toBe(objects[0]!.id);
+      },
+    );
+  it('omits an empty body', async () => {
+    objects = [commitFixture({ message: 'No body\n' })];
+    expect((await run()).commits[0]!.body).toBeUndefined();
+  });
+  it('oneline keeps only authenticated identity and subject', async () => {
+    const result = await run({ oneline: true });
+    expect(result.commits[0]).toEqual({
+      hash: objects[0]!.id,
+      shortHash: objects[0]!.id.slice(0, 7),
+      subject: 'subject',
+    });
+    expect(calls[0]).toContain('--format=%H');
+    expect(calls[0]!.some((flag) => /%[asbP]/.test(flag))).toBe(false);
+  });
+  it('full mode retains independently authenticated metadata', async () => {
+    objects = [
+      commitFixture({
+        author: 'Another Fixture',
+        email: 'another@example.invalid',
+        timestamp: 1700000002,
+      }),
+    ];
+    expect((await run()).commits[0]).toMatchObject({
+      author: 'Another Fixture',
+      authorEmail: 'another@example.invalid',
+      timestamp: 1700000002,
     });
   });
-
-  describe('skip option', () => {
-    it('adds --skip flag with skip value', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ skip: 5 }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--skip=5');
-    });
-
-    it('combines skip with maxCount for pagination', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ skip: 10, maxCount: 5 }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--skip=10');
-      expect(args).toContain('-n5');
-    });
+  for (const output of [
+    'abc123\n',
+    'f'.repeat(40) + '\n' + 'f'.repeat(40) + '\n',
+    '<<<COMMIT_START>>>fake',
+  ]) {
+    it(
+      'rejects malformed or duplicate enumeration ' + JSON.stringify(output),
+      async () => {
+        execute.mockResolvedValueOnce({ stdout: output, stderr: '' });
+        await expect(run()).rejects.toThrow();
+      },
+    );
+  }
+  it('rejects object substitution instead of returning partial records', async () => {
+    execute
+      .mockResolvedValueOnce({ stdout: objects[0]!.id + '\n', stderr: '' })
+      .mockResolvedValueOnce({
+        stdout: commitFixture({ message: 'other' }).raw,
+        stderr: '',
+      });
+    await expect(run()).rejects.toThrow();
   });
-
-  describe('date filter options', () => {
-    it('adds --since flag', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ since: '2024-01-01' }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--since=2024-01-01');
+  for (const maxCount of [0, -1, 1001])
+    it('rejects unsupported record limit ' + maxCount, async () => {
+      await expect(run({ maxCount })).rejects.toThrow();
+      expect(calls).toHaveLength(0);
     });
-
-    it('adds --until flag', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ until: '2024-12-31' }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--until=2024-12-31');
-    });
-
-    it('combines since and until for date range', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog(
-        { since: '2024-01-01', until: '2024-06-30' },
-        mockContext,
-        mockExecGit,
-      );
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--since=2024-01-01');
-      expect(args).toContain('--until=2024-06-30');
-    });
-  });
-
-  describe('author filter option', () => {
-    it('adds --author flag', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ author: 'John Doe' }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--author=John Doe');
-    });
-
-    it('supports email pattern in author filter', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ author: '@example.com' }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--author=@example.com');
-    });
-  });
-
-  describe('grep option', () => {
-    it('adds --grep flag', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ grep: 'fix:' }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--grep=fix:');
-    });
-  });
-
-  describe('branch option', () => {
-    it('adds branch name to args', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ branch: 'develop' }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('develop');
-    });
-  });
-
-  describe('path filter option', () => {
-    it('adds path filter with -- separator', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ path: 'src/index.ts' }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      const dashDashIdx = args.indexOf('--');
-      expect(dashDashIdx).toBeGreaterThan(-1);
-      expect(args[dashDashIdx + 1]).toBe('src/index.ts');
-    });
-  });
-
-  describe('stat option', () => {
-    it('adds --stat flag when stat is true', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ stat: true }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--stat');
-    });
-
-    it('includes stat content in commit result', async () => {
-      const statContent =
-        'file.txt | 10 +++++++---\n 1 file changed, 7 insertions(+), 3 deletions(-)';
-      const output = buildLogOutput([
-        {
-          hash: 'abc123',
-          shortHash: 'abc',
-          author: 'Test',
-          email: 'test@test.com',
-          timestamp: 1000,
-          subject: 'Test commit',
-          stat: statContent,
-        },
-      ]);
-
-      mockExecGit.mockResolvedValueOnce({ stdout: output, stderr: '' });
-
-      const result = await executeLog({ stat: true }, mockContext, mockExecGit);
-
-      expect(result.commits[0]!.stat).toBe(statContent);
-    });
-
-    it('handles commits with no file changes in stat mode', async () => {
-      const output = buildLogOutput([
-        {
-          hash: 'abc123',
-          shortHash: 'abc',
-          author: 'Test',
-          email: 'test@test.com',
-          timestamp: 1000,
-          subject: 'Empty commit',
-        },
-      ]);
-
-      mockExecGit.mockResolvedValueOnce({ stdout: output, stderr: '' });
-
-      const result = await executeLog({ stat: true }, mockContext, mockExecGit);
-
-      expect(result.commits[0]!.stat).toBeUndefined();
-    });
-  });
-
-  describe('patch option', () => {
-    it('adds -p flag when patch is true', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ patch: true }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('-p');
-    });
-
-    it('includes patch content in commit result', async () => {
-      const patchContent = `diff --git a/file.txt b/file.txt
-index abc123..def456 100644
---- a/file.txt
-+++ b/file.txt
-@@ -1 +1,2 @@
- original
-+added line`;
-
-      const output = buildLogOutput([
-        {
-          hash: 'abc123',
-          shortHash: 'abc',
-          author: 'Test',
-          email: 'test@test.com',
-          timestamp: 1000,
-          subject: 'Test commit',
-          patch: patchContent,
-        },
-      ]);
-
-      mockExecGit.mockResolvedValueOnce({ stdout: output, stderr: '' });
-
-      const result = await executeLog(
-        { patch: true },
-        mockContext,
-        mockExecGit,
-      );
-
-      expect(result.commits[0]!.patch).toContain('diff --git');
-      expect(result.commits[0]!.patch).toContain('+added line');
-    });
-  });
-
-  describe('stat + patch combined', () => {
-    it('adds both --stat and -p flags', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ stat: true, patch: true }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--stat');
-      expect(args).toContain('-p');
-    });
-
-    it('correctly splits stat and patch content', async () => {
-      // When both stat and patch are requested, git outputs stat first, then patch
-      const statContent = 'file.txt | 1 +\n 1 file changed, 1 insertion(+)';
-      const patchContent = `a/file.txt b/file.txt
---- a/file.txt
-+++ b/file.txt
-@@ -0,0 +1 @@
-+new line`;
-
-      const output = buildLogOutput([
-        {
-          hash: 'abc123',
-          shortHash: 'abc',
-          author: 'Test',
-          email: 'test@test.com',
-          timestamp: 1000,
-          subject: 'Test commit',
-          stat: statContent,
-          patch: patchContent,
-        },
-      ]);
-
-      mockExecGit.mockResolvedValueOnce({ stdout: output, stderr: '' });
-
-      const result = await executeLog(
-        { stat: true, patch: true },
-        mockContext,
-        mockExecGit,
-      );
-
-      const commit = result.commits[0]!;
-      expect(commit.stat).toBe(statContent);
-      expect(commit.patch).toContain('a/file.txt b/file.txt');
-    });
-  });
-
-  describe('multi-line commit bodies', () => {
-    it('preserves multi-line commit body', async () => {
-      const body = `This is line 1
-This is line 2
-This is line 3`;
-
-      const output = buildLogOutput([
-        {
-          hash: 'abc123',
-          shortHash: 'abc',
-          author: 'Test',
-          email: 'test@test.com',
-          timestamp: 1000,
-          subject: 'Multi-line body',
-          body: body,
-        },
-      ]);
-
-      mockExecGit.mockResolvedValueOnce({ stdout: output, stderr: '' });
-
-      const result = await executeLog({}, mockContext, mockExecGit);
-
-      expect(result.commits[0]!.body).toBe(body);
-    });
-  });
-
-  describe('special characters in commit messages', () => {
-    it('handles special characters in subject', async () => {
-      const output = buildLogOutput([
-        {
-          hash: 'abc123',
-          shortHash: 'abc',
-          author: 'Test',
-          email: 'test@test.com',
-          timestamp: 1000,
-          subject: 'feat: add "quotes" & <special> chars $var',
-        },
-      ]);
-
-      mockExecGit.mockResolvedValueOnce({ stdout: output, stderr: '' });
-
-      const result = await executeLog({}, mockContext, mockExecGit);
-
-      expect(result.commits[0]!.subject).toBe(
-        'feat: add "quotes" & <special> chars $var',
-      );
-    });
-  });
-
-  describe('empty body handling', () => {
-    it('does not set body when empty', async () => {
-      const output = buildLogOutput([
-        {
-          hash: 'abc123',
-          shortHash: 'abc',
-          author: 'Test',
-          email: 'test@test.com',
-          timestamp: 1000,
-          subject: 'No body',
-          body: '',
-        },
-      ]);
-
-      mockExecGit.mockResolvedValueOnce({ stdout: output, stderr: '' });
-
-      const result = await executeLog({}, mockContext, mockExecGit);
-
-      expect(result.commits[0]!.body).toBeUndefined();
-    });
-  });
-
-  describe('oneline mode', () => {
-    it('uses a shorter format string that omits %an/%ae/%at/%b/%P', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      await executeLog({ oneline: true }, mockContext, mockExecGit);
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      const formatArg = args.find((a) => a.startsWith('--format='));
-      expect(formatArg).toBeDefined();
-      expect(formatArg).toContain('%H');
-      expect(formatArg).toContain('%h');
-      expect(formatArg).toContain('%s');
-      expect(formatArg).not.toContain('%an');
-      expect(formatArg).not.toContain('%ae');
-      expect(formatArg).not.toContain('%at');
-      expect(formatArg).not.toContain('%b');
-      expect(formatArg).not.toContain('%P');
-    });
-
-    it('parses oneline output with no author/email/timestamp/parents fields', async () => {
-      // Oneline format: START hash|shortHash|subject END
-      const stdout = `${COMMIT_START}abc123def456${FIELD_DELIMITER}abc123d${FIELD_DELIMITER}feat: do the thing${COMMIT_END}\n${COMMIT_START}789xyz${FIELD_DELIMITER}789xyzz${FIELD_DELIMITER}fix: prior bug${COMMIT_END}`;
-
-      mockExecGit.mockResolvedValueOnce({ stdout, stderr: '' });
-
-      const result = await executeLog(
-        { oneline: true },
-        mockContext,
-        mockExecGit,
-      );
-
-      expect(result.commits).toHaveLength(2);
-      expect(result.commits[0]!.hash).toBe('abc123def456');
-      expect(result.commits[0]!.shortHash).toBe('abc123d');
-      expect(result.commits[0]!.subject).toBe('feat: do the thing');
-      // Honest absence — no placeholder values
-      expect(result.commits[0]!.author).toBeUndefined();
-      expect(result.commits[0]!.authorEmail).toBeUndefined();
-      expect(result.commits[0]!.timestamp).toBeUndefined();
-      expect(result.commits[0]!.parents).toBeUndefined();
-      expect(result.commits[0]!.body).toBeUndefined();
-    });
-
-    it('full mode (default) still populates author/email/timestamp/parents', async () => {
-      const output = buildLogOutput([
-        {
-          hash: 'abc123',
-          shortHash: 'abc',
-          author: 'Test User',
-          email: 'test@example.com',
-          timestamp: 1700000000,
-          subject: 'feat: add thing',
-          body: 'body text',
-          parents: 'parent1 parent2',
-        },
-      ]);
-
-      mockExecGit.mockResolvedValueOnce({ stdout: output, stderr: '' });
-
-      const result = await executeLog({}, mockContext, mockExecGit);
-
-      expect(result.commits[0]!.author).toBe('Test User');
-      expect(result.commits[0]!.authorEmail).toBe('test@example.com');
-      expect(result.commits[0]!.timestamp).toBe(1700000000);
-      expect(result.commits[0]!.parents).toEqual(['parent1', 'parent2']);
-      expect(result.commits[0]!.body).toBe('body text');
-    });
-  });
 });

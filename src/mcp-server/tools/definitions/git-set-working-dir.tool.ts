@@ -3,8 +3,10 @@
  * @module mcp-server/tools/definitions/git-set-working-dir
  */
 import { z } from 'zod';
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 
 import { resolveGitPath } from '../utils/git-path-policy.js';
+import { repositoryRootsFromContext } from '@/services/git/core/configured-repository-policy.js';
 
 import { withToolAuth } from '@/mcp-server/transports/auth/lib/withAuth.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
@@ -112,6 +114,7 @@ async function ensureRepositoryReady(
     workingDirectory: input.path,
     requestContext: appContext,
     tenantId,
+    repositoryRoots: repositoryRootsFromContext(appContext),
   };
 
   try {
@@ -145,13 +148,15 @@ async function gitSetWorkingDirLogic(
   const tenantId = appContext.tenantId || 'default-tenant';
   input = {
     ...input,
-    path: await resolveGitPath(input.path, { unrestrictedRelative: true }),
+    path: await resolveGitPath(input.path, {
+      unrestrictedRelative: true,
+      repositoryRoots: repositoryRootsFromContext(appContext),
+    }),
   };
 
   await ensureRepositoryReady(input, dependencies, tenantId);
 
-  const storageKey = `session:workingDir:${tenantId}`;
-  await storage.set(storageKey, input.path, appContext);
+  await workingDirectoryStore(storage, appContext).set(input.path);
 
   const { snapshot, warnings } = await gatherRepoSnapshot(
     { provider, appContext, workingDirectory: input.path },

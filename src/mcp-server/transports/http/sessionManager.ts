@@ -12,11 +12,16 @@
  * @module src/mcp-server/transports/http/sessionManager
  */
 import { logger, requestContextService } from '@/utils/index.js';
+import {
+  samePrincipal,
+  type VerifiedPrincipal,
+} from '../auth/lib/verifiedPrincipal.js';
 
 /**
  * Metadata tracked for each HTTP session.
  */
 interface SessionMetadata {
+  readonly owner?: VerifiedPrincipal;
   /** Unique session identifier */
   sessionId: string;
   /** Timestamp when session was created (milliseconds since epoch) */
@@ -73,7 +78,7 @@ export class SessionManager {
    * @param staleTimeoutMs - Session expiry timeout in milliseconds (default: 30 minutes)
    * @param cleanupIntervalMs - How often to run cleanup (default: 5 minutes)
    */
-  private constructor(
+  public constructor(
     staleTimeoutMs = 30 * 60 * 1000, // 30 minutes
     cleanupIntervalMs = 5 * 60 * 1000, // 5 minutes
   ) {
@@ -125,6 +130,7 @@ export class SessionManager {
     sessionId: string,
     clientId?: string,
     tenantId?: string,
+    owner?: VerifiedPrincipal,
   ): string {
     const now = Date.now();
     const metadata: SessionMetadata = {
@@ -133,6 +139,7 @@ export class SessionManager {
       lastActivityAt: now,
       ...(clientId !== undefined && { clientId }),
       ...(tenantId !== undefined && { tenantId }),
+      ...(owner && { owner: Object.freeze({ ...owner }) }),
     };
 
     this.sessions.set(sessionId, metadata);
@@ -148,6 +155,15 @@ export class SessionManager {
     });
 
     return sessionId;
+  }
+
+  /** Pure owner comparison: no expiry, cleanup, activity update or lease change. */
+  public isSessionOwner(
+    sessionId: string,
+    principal: VerifiedPrincipal,
+  ): boolean {
+    const owner = this.sessions.get(sessionId)?.owner;
+    return owner !== undefined && samePrincipal(owner, principal);
   }
 
   /**
@@ -166,7 +182,7 @@ export class SessionManager {
     const age = now - session.lastActivityAt;
 
     // Session is stale if no activity within timeout window
-    if (age > this.staleTimeoutMs) {
+    if (age >= this.staleTimeoutMs) {
       logger.info('Session expired due to inactivity', {
         ...requestContextService.createRequestContext({
           operation: 'SessionManager.isSessionValid',
@@ -253,6 +269,7 @@ export class SessionManager {
     this.cleanupIntervalId = setInterval(() => {
       this.cleanupStaleSessions();
     }, this.cleanupIntervalMs);
+    this.cleanupIntervalId.unref?.();
 
     logger.info('Session cleanup interval started', {
       ...requestContextService.createRequestContext({
@@ -290,7 +307,7 @@ export class SessionManager {
 
     for (const [sessionId, metadata] of this.sessions.entries()) {
       const age = now - metadata.lastActivityAt;
-      if (age > this.staleTimeoutMs) {
+      if (age >= this.staleTimeoutMs) {
         this.sessions.delete(sessionId);
         this.onSessionExpired?.(sessionId);
         removedCount++;
@@ -314,7 +331,9 @@ export class SessionManager {
    */
   public clearAllSessions(): void {
     const count = this.sessions.size;
+    const ids = [...this.sessions.keys()];
     this.sessions.clear();
+    for (const id of ids) this.onSessionExpired?.(id);
     logger.warning('All sessions cleared', {
       ...requestContextService.createRequestContext({
         operation: 'SessionManager.clearAllSessions',

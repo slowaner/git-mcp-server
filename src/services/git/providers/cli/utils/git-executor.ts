@@ -1,109 +1,154 @@
 /**
- * @fileoverview Centralized Git CLI command executor with cross-runtime support
+ * @fileoverview Controlled, supervised native Git execution.
  * @module services/git/providers/cli/utils/git-executor
- *
- * This module provides the core execution engine for all git operations,
- * with support for both Bun and Node.js runtimes. When running via bunx
- * (Node.js), it uses child_process.spawn. When running in native Bun,
- * it uses Bun.spawn for better performance.
- *
- * Key features:
- * - Cross-runtime compatibility (Bun and Node.js)
- * - Configurable timeouts (60s default)
- * - Buffer size limits (10MB max)
- * - Automatic argument validation
- * - Standardized environment setup
- * - Comprehensive error mapping
  */
-
 import { existsSync, statSync } from 'node:fs';
-
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
-
 import { mapGitError } from './error-mapper.js';
 import { buildGitEnv, validateGitArgs } from './command-builder.js';
-import { spawnGitCommand } from './runtime-adapter.js';
+import { spawnGitCommand, type GitCommandResult } from './runtime-adapter.js';
+import {
+  assertConfiguredGitExecutionPolicy,
+  withConfiguredGitExecutionContext,
+} from './configured-execution-policy.js';
+import {
+  getGitExecutionFailure,
+  recordGitExecutionFailure,
+} from './execution-context.js';
+import { GitExecutionError } from './execution-errors.js';
+import path from 'node:path';
+import { getConfiguredRepositoryPolicy } from '../../../core/configured-repository-policy.js';
+import { containsPath } from '../../../core/repository-capability.js';
+import {
+  authorizeGitCommand,
+  disableSubmoduleRecursion,
+} from '../../../core/repository-command-gate.js';
 
-/** Maximum execution time for git commands (60 seconds) */
-const GIT_COMMAND_TIMEOUT_MS = 60000;
-
-/**
- * Executes a git command with cross-runtime support.
- *
- * This function automatically detects the runtime (Bun vs Node.js) and uses
- * the appropriate process spawning method:
- * - In Bun runtime: Uses Bun.spawn for optimal performance
- * - In Node.js runtime (bunx): Uses child_process.spawn for compatibility
- *
- * Features:
- * - Cross-runtime compatibility
- * - Streaming I/O for efficient handling of large outputs
- * - Robust timeout handling
- * - Automatic security validation
- *
- * @param args - Git command arguments (e.g., ['status', '--porcelain'])
- * @param cwd - The working directory to execute the command in
- * @returns A promise that resolves with the stdout and stderr of the command
- * @throws {McpError} If the command fails, times out, or produces an error
- *
- * @example
- * ```typescript
- * const result = await executeGitCommand(
- *   ['status', '--porcelain=v2', '-b'],
- *   '/path/to/repo'
- * );
- * console.log(result.stdout); // Git status output
- * ```
- */
+/** Internal provider options; repository roots are issued by server authorization. */
 export interface ExecuteGitOptions {
-  /**
-   * If true, return the result with the non-zero exit code instead of throwing.
-   * Used by operations that need to inspect git output on a soft failure
-   * (e.g. a merge conflict).
-   */
-  allowNonZeroExit?: boolean;
+  allowNonZeroExit?: boolean | undefined;
+  signal?: AbortSignal | undefined;
+  deadline?: number | undefined;
+  readonly repositoryRoots?: readonly string[] | undefined;
 }
 
+/** Complete UTF-8 output only. Control failures cannot become soft Git exits. */
 export async function executeGitCommand(
   args: string[],
   cwd: string,
   options: ExecuteGitOptions = {},
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  try {
-    validateGitArgs(args);
+): Promise<GitCommandResult> {
+  return withAuthorizedGitCommand(args, cwd, options, (execute) => execute());
+}
 
-    /**
-     * Pre-flight cwd check. Without this, a missing or non-directory cwd
-     * surfaces as a generic ENOENT from spawn, which mapGitError cannot
-     * distinguish from a missing git binary — both historically rendered as
-     * "Git command not found". Surface the real cause directly.
-     */
-    if (!existsSync(cwd)) {
-      throw new McpError(
-        JsonRpcErrorCode.InvalidRequest,
-        `Working directory does not exist: ${cwd}`,
-        { cwd },
-      );
-    }
-    if (!statSync(cwd).isDirectory()) {
-      throw new McpError(
-        JsonRpcErrorCode.InvalidRequest,
-        `Working directory is not a directory: ${cwd}`,
-        { cwd },
-      );
-    }
+/**
+ * Authorize only the fixed empty, explicitly selected tag-push intent. No push
+ * process, transport hook or network operation is started after authorization.
+ * The caller must independently prove that its explicit local tag set is empty.
+ */
+export async function authorizeEmptyTagPushDestination(
+  remote: string,
+  cwd: string,
+  options: ExecuteGitOptions = {},
+): Promise<void> {
+  return withAuthorizedGitCommand(
+    ['push', '--tags', '--', remote],
+    cwd,
+    options,
+    async () => {},
+    () => {
+      if (!remote || remote.startsWith('-') || /[\x00-\x20\x7f]/.test(remote))
+        throw new McpError(
+          JsonRpcErrorCode.InvalidRequest,
+          'Invalid effective push remote.',
+        );
+    },
+  );
+}
 
-    const result = await spawnGitCommand(
-      args,
-      cwd,
-      buildGitEnv(process.env as Record<string, string>),
-      GIT_COMMAND_TIMEOUT_MS,
-      undefined,
-      options.allowNonZeroExit,
-    );
-
-    return result;
-  } catch (error) {
-    throw mapGitError(error, args[0] || 'unknown');
-  }
+/** One private preflight and lifetime for both fixed intent and native execution. */
+async function withAuthorizedGitCommand<T>(
+  args: string[],
+  cwd: string,
+  options: ExecuteGitOptions,
+  complete: (execute: () => Promise<GitCommandResult>) => Promise<T>,
+  validateIntent?: () => void,
+): Promise<T> {
+  // Must precede cwd stat, repository discovery and every Git invocation.
+  const policy = assertConfiguredGitExecutionPolicy();
+  const failure = getGitExecutionFailure();
+  if (failure) throw failure;
+  return withConfiguredGitExecutionContext(
+    options.signal,
+    async () => {
+      try {
+        args = disableSubmoduleRecursion(args);
+        validateGitArgs(args);
+        validateIntent?.();
+        const roots = getConfiguredRepositoryPolicy(options.repositoryRoots);
+        cwd = roots.resolve(cwd).path;
+        const env = buildGitEnv(process.env, policy);
+        if (roots.roots)
+          env.GIT_CEILING_DIRECTORIES = [
+            ...new Set(
+              roots.roots
+                .filter(
+                  (root) =>
+                    !roots.roots!.some(
+                      (other) => other !== root && containsPath(other, root),
+                    ),
+                )
+                .map((root) => path.dirname(root)),
+            ),
+          ].join(path.delimiter);
+        // Private closure: all discovery uses the same controlled environment,
+        // execution lifetime, raw aggregate budget and strict UTF-8 decoder.
+        const introspect = (command: string[], directory: string) =>
+          spawnGitCommand(
+            command,
+            directory,
+            env,
+            undefined,
+            options.signal,
+            true,
+            { policy, deadline: options.deadline },
+          );
+        if (!existsSync(cwd)) {
+          throw new McpError(
+            JsonRpcErrorCode.InvalidRequest,
+            'Working directory does not exist.',
+          );
+        }
+        if (!statSync(cwd).isDirectory()) {
+          throw new McpError(
+            JsonRpcErrorCode.InvalidRequest,
+            'Working directory is not a directory.',
+          );
+        }
+        cwd = await authorizeGitCommand(roots, args, cwd, introspect);
+        return await complete(() =>
+          spawnGitCommand(
+            args,
+            cwd,
+            env,
+            undefined,
+            options.signal,
+            options.allowNonZeroExit,
+            { policy, deadline: options.deadline },
+          ),
+        );
+      } catch (error) {
+        if (
+          error instanceof McpError &&
+          error.code === JsonRpcErrorCode.Forbidden
+        ) {
+          throw recordGitExecutionFailure(
+            new GitExecutionError('REPOSITORY_BOUNDARY', error.message),
+          );
+        }
+        throw mapGitError(error, args[0] || 'unknown');
+      }
+    },
+    options.deadline,
+  );
 }

@@ -8,6 +8,7 @@
 import { trace } from '@opentelemetry/api';
 
 import { authContext as alsAuthContext } from '@/mcp-server/transports/auth/lib/authContext.js';
+import type { VerifiedPrincipal } from '@/mcp-server/transports/auth/lib/verifiedPrincipal.js';
 import { generateRequestContextId } from '@/utils/index.js';
 import { logger } from '@/utils/internal/logger.js';
 
@@ -45,6 +46,14 @@ export interface RequestContext {
    * This is essential for multi-tenancy and data isolation.
    */
   tenantId?: string;
+
+  /** Verified server-side identity, never reconstructed from caller context. */
+  readonly principal?: VerifiedPrincipal;
+  /** Owner-authorized server-generated session identifier. */
+  readonly sessionId?: string;
+
+  /** Server-issued repository restriction, intersected with the operator ceiling. */
+  readonly repositoryRoots?: readonly string[];
 
   /**
    * Optional authentication context, present if the request was authenticated.
@@ -180,7 +189,7 @@ const requestContextServiceInstance = {
     }
 
     const authStore = alsAuthContext.getStore();
-    const tenantIdFromAuth = authStore?.authInfo?.tenantId;
+    const tenantIdFromAuth = authStore?.principal?.tenantId;
 
     const inheritedRequestId = inheritedContext.requestId;
     const requestId =
@@ -217,7 +226,21 @@ const requestContextServiceInstance = {
         ? additionalContext
         : {}),
       ...(operation && typeof operation === 'string' ? { operation } : {}),
+      // Caller metadata must never replace the current verified identity/session.
+      ...(authStore?.principal
+        ? {
+            principal: authStore.principal,
+            tenantId: authStore.principal.tenantId,
+          }
+        : {}),
+      ...(authStore?.sessionId ? { sessionId: authStore.sessionId } : {}),
     };
+    if (
+      context.repositoryRoots === undefined &&
+      authStore?.repositoryRoots !== undefined
+    ) {
+      Object.assign(context, { repositoryRoots: authStore.repositoryRoots });
+    }
 
     // --- OpenTelemetry Integration ---
     const activeSpan = trace.getActiveSpan();

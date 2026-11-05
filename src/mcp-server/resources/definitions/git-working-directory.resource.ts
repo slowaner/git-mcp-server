@@ -3,6 +3,9 @@
  * @module mcp-server/resources/definitions/git-working-directory
  */
 import { z } from 'zod';
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
+import { resolveGitPath } from '@/mcp-server/tools/utils/git-path-policy.js';
+import { repositoryRootsFromContext } from '@/services/git/core/configured-repository-policy.js';
 
 import { type RequestContext, logger } from '@/utils/index.js';
 import { withResourceAuth } from '@/mcp-server/transports/auth/lib/withAuth.js';
@@ -50,12 +53,13 @@ async function gitWorkingDirectoryLogic(
 
   const storage = container.resolve<StorageService>(StorageServiceToken);
 
-  // Graceful degradation for tenantId
-  const tenantId = context.tenantId || 'default-tenant';
-
   // Attempt to get working directory from session storage
-  const storageKey = `session:workingDir:${tenantId}`;
-  const workingDirectory = await storage.get<string>(storageKey, context);
+  const stored = await workingDirectoryStore(storage, context).get();
+  const workingDirectory = stored
+    ? await resolveGitPath(stored, {
+        repositoryRoots: repositoryRootsFromContext(context),
+      })
+    : null;
 
   const isSet = !!workingDirectory;
   const message = isSet

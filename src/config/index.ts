@@ -8,13 +8,17 @@
  * @module src/config/index
  */
 import { homedir } from 'os';
+import { validateAuthenticationConfiguration } from '@/mcp-server/transports/auth/lib/authConfiguration.js';
 import path from 'node:path';
 
-import dotenv from 'dotenv';
 import { z } from 'zod';
 
 import packageJson from '../../package.json' with { type: 'json' };
 import { JsonRpcErrorCode, McpError } from '../types-global/errors.js';
+import {
+  HttpSecuritySchema,
+  ToolInputLimitsSchema,
+} from '../mcp-server/transports/http/httpSecurity.js';
 
 type PackageManifest = {
   name?: string;
@@ -23,8 +27,8 @@ type PackageManifest = {
 };
 
 const packageManifest = packageJson as PackageManifest;
-// Suppress dotenv's noisy initial log message as suggested by its output.
-dotenv.config({ quiet: true });
+// Authority comes only from the operator-prepared inherited environment.
+// Never load configuration implicitly from a repository/current-directory file.
 
 // --- Helper Functions ---
 const emptyStringAsUndefined = (val: unknown) => {
@@ -166,14 +170,63 @@ const ConfigSchema = z.object({
     emptyStringAsUndefined,
     z.enum(['minimal', 'standard', 'full']).default('standard'),
   ),
-  mcpHttpPort: z.coerce.number().default(3015),
+  mcpHttpPort: z.coerce.number().int().min(1).max(65535).default(3015),
   mcpHttpHost: z.string().default('127.0.0.1'),
   mcpHttpEndpointPath: z.string().default('/mcp'),
   mcpHttpMaxPortRetries: z.coerce.number().default(15),
   mcpHttpPortRetryDelayMs: z.coerce.number().default(50),
-  mcpStatefulSessionStaleTimeoutMs: z.coerce.number().default(1_800_000),
-  mcpAllowedOrigins: z.array(z.string()).optional(),
+  mcpStatefulSessionStaleTimeoutMs: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(86400000)
+    .default(1_800_000),
+  mcpAllowedOrigins: z
+    .array(
+      z.string().refine((origin) => {
+        try {
+          const url = new URL(origin);
+          return (
+            ['http:', 'https:'].includes(url.protocol) && url.origin === origin
+          );
+        } catch {
+          return false;
+        }
+      }, 'Expected an exact HTTP(S) origin, without wildcard, credentials or path.'),
+    )
+    .max(64)
+    .optional(),
+  httpSecurity: HttpSecuritySchema,
+  toolInputLimits: ToolInputLimitsSchema,
   mcpAuthSecretKey: z.string().optional(),
+  mcpAuthIssuer: z
+    .string()
+    .optional()
+    .describe('Expected JWT issuer; enforced by auth policy.'),
+  mcpAuthAudience: z
+    .string()
+    .optional()
+    .describe('Expected JWT audience; enforced by auth policy.'),
+  mcpAuthMaxTokenLifetimeSeconds: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(86400)
+    .default(3600)
+    .describe('Maximum accepted JWT lifetime.'),
+  mcpAuthClockToleranceSeconds: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(60)
+    .default(5)
+    .describe('JWT clock skew tolerance.'),
+  mcpRepositoryGrants: z
+    .string()
+    .optional()
+    .describe(
+      'JSON repository grants; validated by the auth repository policy.',
+    ),
   mcpAuthMode: z.preprocess(
     emptyStringAsUndefined,
     z.enum(['jwt', 'oauth', 'none']).default('none'),
@@ -232,54 +285,156 @@ const ConfigSchema = z.object({
       z.string().default('./.storage'),
     ), // Supports tilde expansion for filesystem storage
   }),
-  git: z.object({
-    provider: z.preprocess(
-      emptyStringAsUndefined,
-      z.enum(['auto', 'cli', 'isomorphic']).default('auto'),
-    ),
-    signCommits: z.preprocess(parseBoolEnv(true), z.boolean()),
-    authorName: z
-      .string()
-      .regex(
-        /^[^\n\r\0]*$/,
-        'Git author name must not contain newlines or null bytes',
-      )
-      .optional(),
-    authorEmail: z.string().email().optional(),
-    committerName: z
-      .string()
-      .regex(
-        /^[^\n\r\0]*$/,
-        'Git committer name must not contain newlines or null bytes',
-      )
-      .optional(),
-    committerEmail: z.string().email().optional(),
-    wrapupInstructionsPath: z.preprocess(
-      expandTildePath,
-      z.string().optional(),
-    ), // Supports tilde expansion for custom wrapup instructions
-    baseDirs: z.preprocess(
-      (value) =>
-        typeof value === 'string'
-          ? value.split(',').map((entry) => expandTildePath(entry))
-          : value,
-      z
-        .array(
+  git: z
+    .object({
+      executionProfile: z
+        .preprocess(
+          emptyStringAsUndefined,
+          z.enum(['restricted', 'trusted']).default('restricted'),
+        )
+        .describe(
+          'Explicit Git trust profile; restricted requires a verified OS sandbox and otherwise rejects execution.',
+        ),
+      binaryPath: z
+        .preprocess(
+          emptyStringAsUndefined,
           z
             .string()
-            .refine((root) => isAbsolutePath(root) && !root.includes('\0'), {
-              message: 'Every GIT_BASE_DIR entry must be an absolute path',
-            }),
+            .default('/usr/bin/git')
+            .refine(
+              (value) => isAbsolutePath(value) && !value.includes('\0'),
+              'Git binary path must be absolute.',
+            ),
         )
-        .min(1)
-        .transform((roots) => [
-          ...new Set(roots.map((root) => path.resolve(root))),
-        ])
+        .describe('Operator-controlled absolute native Git executable.'),
+      trustedHome: z
+        .preprocess(
+          expandTildePath,
+          z
+            .string()
+            .default(homedir())
+            .refine(
+              (value) => isAbsolutePath(value) && !value.includes('\0'),
+              'Trusted Git HOME must be absolute.',
+            ),
+        )
+        .describe(
+          'Operator-owned HOME for explicitly trusted native configuration and signing.',
+        ),
+      trustedPath: z
+        .preprocess(
+          emptyStringAsUndefined,
+          z
+            .string()
+            .default('/usr/bin:/bin:/usr/sbin:/sbin')
+            .refine(
+              (value) =>
+                !value.includes('\0') &&
+                value
+                  .split(path.delimiter)
+                  .every((entry) => isAbsolutePath(entry)),
+              'Every trusted helper PATH directory must be absolute.',
+            ),
+        )
+        .describe('Explicit helper search path for the trusted Git profile.'),
+      provider: z.preprocess(
+        emptyStringAsUndefined,
+        z.enum(['auto', 'cli', 'isomorphic']).default('auto'),
+      ),
+      signCommits: z.preprocess(parseBoolEnv(true), z.boolean()),
+      authorName: z
+        .string()
+        .regex(
+          /^[^\n\r\0]*$/,
+          'Git author name must not contain newlines or null bytes',
+        )
         .optional(),
-    ),
-    maxCommandTimeoutMs: z.coerce.number().default(30000),
-    maxBufferSizeMb: z.coerce.number().default(10),
-  }),
+      authorEmail: z.string().email().optional(),
+      committerName: z
+        .string()
+        .regex(
+          /^[^\n\r\0]*$/,
+          'Git committer name must not contain newlines or null bytes',
+        )
+        .optional(),
+      committerEmail: z.string().email().optional(),
+      wrapupInstructionsPath: z.preprocess(
+        expandTildePath,
+        z.string().optional(),
+      ), // Supports tilde expansion for custom wrapup instructions
+      baseDirs: z.preprocess(
+        (value) =>
+          typeof value === 'string'
+            ? value.split(',').map((entry) => expandTildePath(entry))
+            : value,
+        z
+          .array(
+            z
+              .string()
+              .refine((root) => isAbsolutePath(root) && !root.includes('\0'), {
+                message: 'Every GIT_BASE_DIR entry must be an absolute path',
+              }),
+          )
+          .min(1)
+          .transform((roots) => [
+            ...new Set(roots.map((root) => path.resolve(root))),
+          ])
+          .optional(),
+      ),
+      maxCommandTimeoutMs: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(2147483647)
+        .default(30000)
+        .describe('Total native Git operation deadline in milliseconds.'),
+      maxBufferSizeMb: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(128)
+        .default(10)
+        .describe(
+          'Legacy aggregate raw-output budget in MiB when byte limits are unset.',
+        ),
+      maxOutputBytes: z
+        .preprocess(
+          emptyStringAsUndefined,
+          z.coerce.number().int().min(1).max(134217728).optional(),
+        )
+        .describe(
+          'Aggregate raw stdout/stderr byte budget across every Git call in one request.',
+        ),
+      maxStdoutBytes: z
+        .preprocess(
+          emptyStringAsUndefined,
+          z.coerce.number().int().min(1).max(134217728).optional(),
+        )
+        .describe('Independent stdout byte cap for each native Git command.'),
+      maxStderrBytes: z
+        .preprocess(
+          emptyStringAsUndefined,
+          z.coerce.number().int().min(1).max(134217728).optional(),
+        )
+        .describe('Independent stderr byte cap for each native Git command.'),
+      terminationGraceMs: z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(5000)
+        .default(250)
+        .describe('Bounded TERM-to-KILL grace for the owned process group.'),
+    })
+    .transform((git) => {
+      const maxOutputBytes =
+        git.maxOutputBytes ?? git.maxBufferSizeMb * 1024 * 1024;
+      return {
+        ...git,
+        maxOutputBytes,
+        maxStdoutBytes: git.maxStdoutBytes ?? maxOutputBytes,
+        maxStderrBytes: git.maxStderrBytes ?? maxOutputBytes,
+      };
+    }),
   openTelemetry: z.object({
     enabled: z.coerce.boolean().default(false),
     serviceName: z.string(),
@@ -334,7 +489,38 @@ const parseConfig = () => {
     mcpAllowedOrigins: env.MCP_ALLOWED_ORIGINS?.split(',')
       .map((o) => o.trim())
       .filter(Boolean),
+    httpSecurity: {
+      allowedHosts: env.MCP_HTTP_ALLOWED_HOSTS?.split(',')
+        .map((host) => host.trim())
+        .filter(Boolean),
+      allowNativeClients: env.MCP_HTTP_ALLOW_NATIVE_CLIENTS,
+      maxBodyBytes: env.MCP_HTTP_MAX_BODY_BYTES,
+      bodyTimeoutMs: env.MCP_HTTP_BODY_TIMEOUT_MS,
+      requestTimeoutMs: env.MCP_HTTP_REQUEST_TIMEOUT_MS,
+      streamTimeoutMs: env.MCP_HTTP_STREAM_TIMEOUT_MS,
+      maxRequests: env.MCP_HTTP_MAX_REQUESTS,
+      maxRequestsPerPrincipal: env.MCP_HTTP_MAX_REQUESTS_PER_PRINCIPAL,
+      maxInitializations: env.MCP_HTTP_MAX_INITIALIZATIONS,
+      maxSessions: env.MCP_HTTP_MAX_SESSIONS,
+      maxSessionsPerPrincipal: env.MCP_HTTP_MAX_SESSIONS_PER_PRINCIPAL,
+      maxStreams: env.MCP_HTTP_MAX_STREAMS,
+      maxStreamsPerPrincipal: env.MCP_HTTP_MAX_STREAMS_PER_PRINCIPAL,
+      requestsPerMinute: env.MCP_HTTP_REQUESTS_PER_MINUTE,
+      maxPrincipals: env.MCP_HTTP_MAX_PRINCIPALS,
+    },
+    toolInputLimits: {
+      maxElements: env.MCP_TOOL_MAX_ELEMENTS,
+      maxArrayLength: env.MCP_TOOL_MAX_ARRAY_LENGTH,
+      maxRecordKeys: env.MCP_TOOL_MAX_RECORD_KEYS,
+      maxDepth: env.MCP_TOOL_MAX_DEPTH,
+      maxStringBytes: env.MCP_TOOL_MAX_STRING_BYTES,
+    },
     mcpAuthSecretKey: env.MCP_AUTH_SECRET_KEY,
+    mcpAuthIssuer: env.MCP_AUTH_ISSUER,
+    mcpAuthAudience: env.MCP_AUTH_AUDIENCE,
+    mcpAuthMaxTokenLifetimeSeconds: env.MCP_AUTH_MAX_TOKEN_LIFETIME_SECONDS,
+    mcpAuthClockToleranceSeconds: env.MCP_AUTH_CLOCK_TOLERANCE_SECONDS,
+    mcpRepositoryGrants: env.MCP_REPOSITORY_GRANTS,
     mcpAuthMode: env.MCP_AUTH_MODE,
     oauthIssuerUrl: env.OAUTH_ISSUER_URL,
     oauthJwksUri: env.OAUTH_JWKS_URI,
@@ -391,8 +577,16 @@ const parseConfig = () => {
         undefined,
       wrapupInstructionsPath: env.GIT_WRAPUP_INSTRUCTIONS_PATH,
       baseDirs: env.GIT_BASE_DIR,
+      executionProfile: env.GIT_EXECUTION_PROFILE,
+      binaryPath: env.GIT_BINARY_PATH,
+      trustedHome: env.GIT_TRUSTED_HOME,
+      trustedPath: env.GIT_TRUSTED_PATH,
       maxCommandTimeoutMs: env.GIT_MAX_COMMAND_TIMEOUT_MS,
       maxBufferSizeMb: env.GIT_MAX_BUFFER_SIZE_MB,
+      maxOutputBytes: env.GIT_MAX_OUTPUT_BYTES,
+      maxStdoutBytes: env.GIT_MAX_STDOUT_BYTES,
+      maxStderrBytes: env.GIT_MAX_STDERR_BYTES,
+      terminationGraceMs: env.GIT_TERMINATION_GRACE_MS,
     },
     openTelemetry: {
       enabled: env.OTEL_ENABLED,
@@ -452,6 +646,7 @@ const parseConfig = () => {
     );
   }
 
+  validateAuthenticationConfiguration(parsedConfig.data);
   return parsedConfig.data;
 };
 

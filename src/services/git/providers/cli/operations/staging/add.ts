@@ -11,6 +11,7 @@ import type {
   GitOperationContext,
 } from '../../../../types.js';
 import { buildGitCommand, mapGitError } from '../../utils/index.js';
+import { literalFileArguments } from '../../utils/git-file-operands.js';
 
 /**
  * Execute git add to stage changes.
@@ -31,12 +32,16 @@ export async function executeAdd(
       args.push('--all');
     } else if (options.update) {
       args.push('--update');
-    } else if (options.paths.length > 0) {
-      args.push(...options.paths);
     }
 
     if (options.force) {
       args.push('--force');
+    }
+
+    if (!options.all && !options.update) {
+      if (options.paths.length === 0)
+        throw new Error('Explicit paths are required');
+      args.push(...literalFileArguments(options.paths));
     }
 
     const cmd = buildGitCommand({ command: 'add', args });

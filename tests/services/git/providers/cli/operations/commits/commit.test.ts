@@ -1,619 +1,193 @@
 /**
- * @fileoverview Unit tests for git commit operation
+ * @fileoverview Commit options and immutable inspection without unsigned retries.
  * @module tests/services/git/providers/cli/operations/commits/commit.test
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { config } from '@/config/index.js';
 import { executeCommit } from '@/services/git/providers/cli/operations/commits/commit.js';
-import { shouldSignCommits } from '@/services/git/providers/cli/utils/config-helper.js';
-import type { GitOperationContext } from '@/services/git/types.js';
+import { commitFixture } from '../../../../../../security/helpers/git-object-fixture.js';
+import type {
+  GitCommitOptions,
+  GitOperationContext,
+} from '@/services/git/types.js';
 import type { RequestContext } from '@/utils/index.js';
 
-// Mock shouldSignCommits to return false by default so signing doesn't
-// interfere. Tests that exercise signing behavior flip it per-case via
-// the `mockReturnValueOnce` cast below — bun's test runner doesn't
-// expose vi.mocked, so we use a direct cast on the imported function.
-vi.mock('@/services/git/providers/cli/utils/config-helper.js', () => ({
-  shouldSignCommits: vi.fn(() => false),
-  loadConfig: vi.fn(() => null),
-}));
-
-type ExecGitFn = (
-  args: string[],
-  cwd: string,
-  ctx: RequestContext,
-) => Promise<{ stdout: string; stderr: string }>;
-
-// The delimiters used by the commit operation for git show format
-const FIELD_DELIM = '\x1F';
-const RECORD_DELIM = '\x1E';
-
 describe('executeCommit', () => {
-  const mockContext: GitOperationContext = {
-    workingDirectory: '/test/repo',
-    requestContext: {
-      requestId: 'test-request-id',
-    } as RequestContext,
-    tenantId: 'test-tenant',
+  const context: GitOperationContext = {
+    workingDirectory: '/fixture/repository',
+    requestContext: { requestId: 'fixture' } as RequestContext,
   };
-
-  let mockExecGit: ReturnType<typeof vi.fn<ExecGitFn>>;
-
+  let saved: boolean;
+  let object: ReturnType<typeof commitFixture>;
+  let names: string;
+  let failCommand: string | undefined;
+  const calls: string[][] = [];
+  const execute = vi.fn(async (args: string[]) => {
+    calls.push(args);
+    if (args[0] === failCommand) throw new Error('fixture operation failed');
+    if (args[0] === 'rev-parse')
+      return { stdout: object.id + '\n', stderr: '' };
+    if (args[0] === 'cat-file') return { stdout: object.raw, stderr: '' };
+    if (args[0] === 'show') return { stdout: names, stderr: '' };
+    return { stdout: '', stderr: '' };
+  });
+  const run = (options: Partial<GitCommitOptions> = {}) =>
+    executeCommit(
+      { message: 'requested message', ...options },
+      context,
+      execute,
+    );
   beforeEach(() => {
-    mockExecGit = vi.fn<ExecGitFn>().mockResolvedValue({
-      stdout: 'tree abc\nauthor Test\ncommitter Test\n\nmessage\n',
-      stderr: '',
-    });
+    saved = config.git.signCommits;
+    config.git.signCommits = false;
+    object = commitFixture();
+    names = 'src/index.ts\0README.md\0';
+    calls.length = 0;
+    failCommand = undefined;
+    execute.mockClear();
+  });
+  afterEach(() => {
+    config.git.signCommits = saved;
   });
 
-  describe('basic commit', () => {
-    it('creates a commit with a message', async () => {
-      const showOutput = `John Doe${FIELD_DELIM}1700000000${RECORD_DELIM}\nsrc/index.ts\nREADME.md\n`;
-
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' }) // commit
-        .mockResolvedValueOnce({ stdout: 'abc123def456\n', stderr: '' }) // rev-parse HEAD
-        .mockResolvedValueOnce({ stdout: showOutput, stderr: '' }); // git show
-
-      const result = await executeCommit(
-        { message: 'feat: add new feature' },
-        mockContext,
-        mockExecGit,
-      );
-
-      expect(result.success).toBe(true);
-      expect(result.commitHash).toBe('abc123def456');
-      expect(result.message).toBe('feat: add new feature');
-      expect(result.author).toBe('John Doe');
-      expect(result.timestamp).toBe(1700000000);
-      expect(result.filesChanged).toContain('src/index.ts');
-      expect(result.filesChanged).toContain('README.md');
-    });
-
-    it('passes the commit message attached to --message=', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        });
-
-      await executeCommit(
-        { message: 'fix: resolve bug' },
-        mockContext,
-        mockExecGit,
-      );
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('commit');
-      expect(args).toContain('--message=fix: resolve bug');
+  it('returns the exact created identity, author, timestamp and complete file list', async () => {
+    const result = await run();
+    expect(result).toEqual({
+      success: true,
+      commitHash: object.id,
+      message: 'requested message',
+      author: 'Fixture Author',
+      timestamp: 1700000000,
+      filesChanged: ['src/index.ts', 'README.md'],
+      signed: false,
     });
   });
-
-  describe('filesToStage option', () => {
-    it('runs git add before commit when filesToStage is provided', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' }) // git add
-        .mockResolvedValueOnce({ stdout: '', stderr: '' }) // commit
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' }) // rev-parse
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\nfile.ts\n`,
-          stderr: '',
-        }); // show
-
-      await executeCommit(
-        { message: 'test', filesToStage: ['src/a.ts', 'src/b.ts'] },
-        mockContext,
-        mockExecGit,
-      );
-
-      expect(mockExecGit).toHaveBeenCalledTimes(5);
-      // First call should be git add
-      const [addArgs] = mockExecGit.mock.calls[0]!;
-      expect(addArgs).toContain('add');
-      expect(addArgs).toContain('--');
-      expect(addArgs).toContain('src/a.ts');
-      expect(addArgs).toContain('src/b.ts');
-      // Second call should be git commit
-      const [commitArgs] = mockExecGit.mock.calls[1]!;
-      expect(commitArgs).toContain('commit');
-    });
-
-    it('skips git add when filesToStage is empty', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' }) // commit
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' }) // rev-parse
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        }); // show
-
-      await executeCommit(
-        { message: 'test', filesToStage: [] },
-        mockContext,
-        mockExecGit,
-      );
-
-      expect(mockExecGit).toHaveBeenCalledTimes(4);
-      const [commitArgs] = mockExecGit.mock.calls[0]!;
-      expect(commitArgs).toContain('commit');
-    });
-
-    it('skips git add when filesToStage is not provided', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' }) // commit
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' }) // rev-parse
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        }); // show
-
-      await executeCommit({ message: 'test' }, mockContext, mockExecGit);
-
-      expect(mockExecGit).toHaveBeenCalledTimes(4);
-      const [commitArgs] = mockExecGit.mock.calls[0]!;
-      expect(commitArgs).toContain('commit');
-    });
+  it('attaches a dash-leading message instead of passing another option', async () => {
+    await run({ message: '--amend' });
+    expect(calls[0]).toContain('--message=--amend');
   });
-
-  describe('amend option', () => {
-    it('passes --amend flag when amend is true', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        });
-
-      await executeCommit(
-        { message: 'fix: updated message', amend: true },
-        mockContext,
-        mockExecGit,
-      );
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--amend');
-    });
-
-    it('does not pass --amend when amend is false', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        });
-
-      await executeCommit(
-        { message: 'new commit', amend: false },
-        mockContext,
-        mockExecGit,
-      );
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).not.toContain('--amend');
-    });
+  it('stages only explicit literal files before creation', async () => {
+    await run({ filesToStage: ['src/a.ts', ':(glob)*'] });
+    expect(calls[0]).toEqual([
+      'add',
+      '--',
+      ':(literal)src/a.ts',
+      ':(literal):(glob)*',
+    ]);
+    expect(calls[1]![0]).toBe('commit');
+    expect(calls).toHaveLength(5);
   });
-
-  describe('allow-empty option', () => {
-    it('passes --allow-empty flag when allowEmpty is true', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        });
-
-      await executeCommit(
-        { message: 'empty commit', allowEmpty: true },
-        mockContext,
-        mockExecGit,
-      );
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--allow-empty');
+  for (const files of [undefined, []])
+    it(
+      'omits staging for absent or empty file selections ' + String(files),
+      async () => {
+        await run(files ? { filesToStage: files } : {});
+        expect(calls[0]![0]).toBe('commit');
+        expect(calls).toHaveLength(4);
+      },
+    );
+  for (const [option, flag] of [
+    ['amend', '--amend'],
+    ['allowEmpty', '--allow-empty'],
+    ['noVerify', '--no-verify'],
+  ] as const) {
+    it('preserves enabled ' + option, async () => {
+      await run({ [option]: true });
+      expect(calls[0]).toContain(flag);
     });
+    it('omits disabled ' + option, async () => {
+      await run({ [option]: false });
+      expect(calls[0]).not.toContain(flag);
+    });
+  }
+  it('preserves explicit author metadata and combined flags', async () => {
+    await run({
+      amend: true,
+      noVerify: true,
+      author: { name: 'Another Fixture', email: 'another@example.invalid' },
+    });
+    expect(calls[0]).toContain(
+      '--author=Another Fixture <another@example.invalid>',
+    );
+    expect(calls[0]).toContain('--amend');
+    expect(calls[0]).toContain('--no-verify');
   });
-
-  describe('no-verify option', () => {
-    it('passes --no-verify flag when noVerify is true', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        });
-
-      await executeCommit(
-        { message: 'skip hooks', noVerify: true },
-        mockContext,
-        mockExecGit,
-      );
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--no-verify');
-    });
-  });
-
-  describe('signing policy', () => {
-    it('passes --gpg-sign and reports signed: true when GIT_SIGN_COMMITS is enabled and signing succeeds', async () => {
-      (
-        shouldSignCommits as unknown as {
-          mockReturnValueOnce: (v: boolean) => void;
-        }
-      ).mockReturnValueOnce(true);
-
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        })
-        .mockResolvedValueOnce({
-          stdout:
-            'tree abc\ngpgsig -----BEGIN SSH SIGNATURE-----\n body\n\nmessage',
-          stderr: '',
-        });
-
-      const result = await executeCommit(
-        { message: 'signed commit' },
-        mockContext,
-        mockExecGit,
-      );
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--gpg-sign');
-      expect(result.signed).toBe(true);
-      expect(result.signingWarning).toBeUndefined();
-    });
-
-    it('omits --gpg-sign and reports signed: false when GIT_SIGN_COMMITS is disabled', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        });
-
-      const result = await executeCommit(
-        { message: 'unsigned commit' },
-        mockContext,
-        mockExecGit,
-      );
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).not.toContain('--gpg-sign');
-      expect(result.signed).toBe(false);
-      expect(result.signingWarning).toBeUndefined();
-    });
-
-    it('falls back to unsigned, sets signed: false, and populates signingWarning when signing fails', async () => {
-      (
-        shouldSignCommits as unknown as {
-          mockReturnValueOnce: (v: boolean) => void;
-        }
-      ).mockReturnValueOnce(true);
-
-      const showOutput = `Author${FIELD_DELIM}0${RECORD_DELIM}\nfile.ts\n`;
-
-      mockExecGit
-        .mockRejectedValueOnce(new Error('error: gpg failed to sign the data'))
-        .mockResolvedValueOnce({ stdout: '', stderr: '' }) // unsigned retry
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' }) // rev-parse
-        .mockResolvedValueOnce({ stdout: showOutput, stderr: '' }); // show
-
-      const result = await executeCommit(
-        { message: 'signed commit' },
-        mockContext,
-        mockExecGit,
-      );
-
-      expect(mockExecGit).toHaveBeenCalledTimes(5);
-      // Second call (retry) should not contain --gpg-sign
-      const [retryArgs] = mockExecGit.mock.calls[1]!;
-      expect(retryArgs).toContain('commit');
-      expect(retryArgs).not.toContain('--gpg-sign');
-      expect(result.success).toBe(true);
-      expect(result.signed).toBe(false);
-      expect(result.signingWarning).toContain('signing failed');
-      expect(result.signingWarning).toContain('gpg failed to sign');
-    });
-
-    it('propagates errors when signing is disabled (no fallback applies)', async () => {
-      mockExecGit.mockRejectedValueOnce(
-        new Error('nothing to commit, working tree clean'),
-      );
-
-      await expect(
-        executeCommit({ message: 'unsigned commit' }, mockContext, mockExecGit),
-      ).rejects.toThrow();
-
-      expect(mockExecGit).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe('native signature inspection', () => {
-    for (const header of ['gpgsig', 'gpgsig-sha256']) {
-      it(`reports native signing from ${header} without forcing signing`, async () => {
-        mockExecGit
-          .mockResolvedValueOnce({ stdout: '', stderr: '' })
-          .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-          .mockResolvedValueOnce({
-            stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-            stderr: '',
-          })
-          .mockResolvedValueOnce({
-            stdout: `tree abc\n${header} -----BEGIN SSH SIGNATURE-----\n body\n\nmessage`,
-            stderr: '',
-          });
-
-        const result = await executeCommit(
-          { message: 'native signature' },
-          mockContext,
-          mockExecGit,
-        );
-        expect(mockExecGit.mock.calls[0]![0]).not.toContain('--gpg-sign');
+  for (const header of ['gpgsig', 'gpgsig-sha256'])
+    it(
+      'reports native signature header ' + header + ' without forcing signing',
+      async () => {
+        object = commitFixture({ signatureHeader: header });
+        const result = await run();
         expect(result.signed).toBe(true);
+        expect(calls[0]).not.toContain('--gpg-sign');
         expect(result.signingWarning).toBeUndefined();
-        expect(mockExecGit.mock.calls[3]![0]).toEqual([
-          'cat-file',
-          'commit',
-          'abc123',
-        ]);
-      });
-    }
-
-    it('does not count signature-like text in the commit message', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        })
-        .mockResolvedValueOnce({
-          stdout: 'tree abc\n\nmessage\ngpgsig -----BEGIN SSH SIGNATURE-----',
-          stderr: '',
-        });
-      expect(
-        (await executeCommit({ message: 'message' }, mockContext, mockExecGit))
-          .signed,
-      ).toBe(false);
-    });
-
-    it('reports a signature produced by native config on retry', async () => {
-      (
-        shouldSignCommits as unknown as {
-          mockReturnValueOnce: (v: boolean) => void;
-        }
-      ).mockReturnValueOnce(true);
-      mockExecGit
-        .mockRejectedValueOnce(new Error('signing failed once'))
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        })
-        .mockResolvedValueOnce({
-          stdout: 'tree abc\ngpgsig signature\n\nmessage',
-          stderr: '',
-        });
-      const result = await executeCommit(
-        { message: 'retry' },
-        mockContext,
-        mockExecGit,
-      );
-      expect(mockExecGit.mock.calls[1]![0]).not.toContain('--gpg-sign');
-      expect(result.signed).toBe(true);
-      expect(result.signingWarning).toContain('native Git configuration');
-    });
-
-    it('does not retry creation after a signature read fails', async () => {
-      (
-        shouldSignCommits as unknown as {
-          mockReturnValueOnce: (v: boolean) => void;
-        }
-      ).mockReturnValueOnce(true);
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        })
-        .mockRejectedValueOnce(new Error('object read failed'));
-      await expect(
-        executeCommit({ message: 'test' }, mockContext, mockExecGit),
-      ).rejects.toThrow(/object read failed/);
-      expect(
-        mockExecGit.mock.calls.filter(([args]) => args[0] === 'commit'),
-      ).toHaveLength(1);
+      },
+    );
+  it('strict signing requests a signature and checks its actual presence', async () => {
+    config.git.signCommits = true;
+    object = commitFixture({ signatureHeader: 'gpgsig' });
+    expect((await run()).signed).toBe(true);
+    expect(calls[0]).toContain('--gpg-sign');
+  });
+  it('rejects an absent strict signature without another creation', async () => {
+    config.git.signCommits = true;
+    await expect(run()).rejects.toThrow(/Required signature/);
+    expect(calls.filter((args) => args[0] === 'commit')).toHaveLength(1);
+  });
+  for (const required of [true, false])
+    it(
+      'propagates creation failure once under policy ' + required,
+      async () => {
+        config.git.signCommits = required;
+        failCommand = 'commit';
+        await expect(run()).rejects.toThrow(/fixture operation failed/);
+        expect(calls).toHaveLength(1);
+        expect(calls[0]!.includes('--gpg-sign')).toBe(required);
+      },
+    );
+  it('does not count signature-looking message text as a header', async () => {
+    object = commitFixture({ message: 'subject\n\ngpgsig forged\n' });
+    expect((await run()).signed).toBe(false);
+  });
+  it('does not retry a creation after an object read failure', async () => {
+    failCommand = 'cat-file';
+    await expect(run()).rejects.toThrow(/fixture operation failed/);
+    expect(calls.filter((args) => args[0] === 'commit')).toHaveLength(1);
+  });
+  it('preserves newline/control/Unicode filenames using NUL records', async () => {
+    names = 'line\nname\0\ufeff\ufffd\0';
+    expect((await run()).filesChanged).toEqual(['line\nname', '\ufeff\ufffd']);
+  });
+  it('accepts an empty changed-file list', async () => {
+    names = '';
+    expect((await run()).filesChanged).toEqual([]);
+  });
+  it('rejects truncated filename records rather than returning partial success', async () => {
+    names = 'one\0truncated';
+    await expect(run()).rejects.toMatchObject({
+      data: { reason: 'INVALID_OUTPUT_FORMAT' },
     });
   });
-
-  describe('author option', () => {
-    it('passes --author flag with formatted name and email', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Jane Smith${FIELD_DELIM}1700000000${RECORD_DELIM}\n`,
-          stderr: '',
-        });
-
-      await executeCommit(
-        {
-          message: 'commit with author',
-          author: { name: 'Jane Smith', email: 'jane@example.com' },
-        },
-        mockContext,
-        mockExecGit,
-      );
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--author=Jane Smith <jane@example.com>');
-    });
+  it('pins both object and filename inspection to the complete created OID', async () => {
+    await run();
+    expect(calls.map((args) => args[0])).toEqual([
+      'commit',
+      'rev-parse',
+      'cat-file',
+      'show',
+    ]);
+    expect(calls[2]).toEqual(['cat-file', 'commit', object.id]);
+    expect(calls[3]).toContain(object.id);
+    expect(calls[3]).toContain('-z');
+    expect(calls[3]).toContain('--format=');
   });
-
-  describe('git show parsing', () => {
-    it('parses author name from show output', async () => {
-      const showOutput = `Alice${FIELD_DELIM}1700001234${RECORD_DELIM}\nfile1.ts\n`;
-
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'def456\n', stderr: '' })
-        .mockResolvedValueOnce({ stdout: showOutput, stderr: '' });
-
-      const result = await executeCommit(
-        { message: 'test' },
-        mockContext,
-        mockExecGit,
-      );
-
-      expect(result.author).toBe('Alice');
-      expect(result.timestamp).toBe(1700001234);
-    });
-
-    it('parses files changed from show output', async () => {
-      const showOutput = `Bob${FIELD_DELIM}1700000000${RECORD_DELIM}\nsrc/a.ts\nsrc/b.ts\nsrc/c.ts\n`;
-
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({ stdout: showOutput, stderr: '' });
-
-      const result = await executeCommit(
-        { message: 'test' },
-        mockContext,
-        mockExecGit,
-      );
-
-      expect(result.filesChanged).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts']);
-    });
-
-    it('handles empty files list', async () => {
-      const showOutput = `Author${FIELD_DELIM}0${RECORD_DELIM}\n`;
-
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({ stdout: showOutput, stderr: '' });
-
-      const result = await executeCommit(
-        { message: 'empty commit', allowEmpty: true },
-        mockContext,
-        mockExecGit,
-      );
-
-      expect(result.filesChanged).toEqual([]);
-    });
-
-    it('trims commit hash from rev-parse', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: '  abc123  \n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        });
-
-      const result = await executeCommit(
-        { message: 'test' },
-        mockContext,
-        mockExecGit,
-      );
-
-      expect(result.commitHash).toBe('abc123');
-    });
-  });
-
-  describe('execution order', () => {
-    it('calls commit, then rev-parse, show, and signature inspection in sequence', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        });
-
-      await executeCommit({ message: 'test' }, mockContext, mockExecGit);
-
-      expect(mockExecGit).toHaveBeenCalledTimes(4);
-
-      // First call: commit
-      const [commitArgs] = mockExecGit.mock.calls[0]!;
-      expect(commitArgs).toContain('commit');
-
-      // Second call: rev-parse
-      const [revParseArgs] = mockExecGit.mock.calls[1]!;
-      expect(revParseArgs).toContain('rev-parse');
-
-      // Third call: show
-      const [showArgs] = mockExecGit.mock.calls[2]!;
-      expect(showArgs).toContain('show');
-    });
-
-    it('passes the commit hash from rev-parse to show', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'deadbeef\n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Author${FIELD_DELIM}0${RECORD_DELIM}\n`,
-          stderr: '',
-        });
-
-      await executeCommit({ message: 'test' }, mockContext, mockExecGit);
-
-      const [showArgs] = mockExecGit.mock.calls[2]!;
-      expect(showArgs).toContain('deadbeef');
-    });
-  });
-
-  describe('combined options', () => {
-    it('handles amend + no-verify + author together', async () => {
-      mockExecGit
-        .mockResolvedValueOnce({ stdout: '', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' })
-        .mockResolvedValueOnce({
-          stdout: `Jane${FIELD_DELIM}1700000000${RECORD_DELIM}\nfile.ts\n`,
-          stderr: '',
-        });
-
-      await executeCommit(
-        {
-          message: 'amended commit',
-          amend: true,
-          noVerify: true,
-          author: { name: 'Jane', email: 'jane@test.com' },
-        },
-        mockContext,
-        mockExecGit,
-      );
-
-      const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('--amend');
-      expect(args).toContain('--no-verify');
-      expect(args).toContain('--author=Jane <jane@test.com>');
-    });
-  });
-
-  describe('error handling', () => {
-    it('throws mapped git error on commit failure', async () => {
-      mockExecGit.mockRejectedValueOnce(
-        new Error('nothing to commit, working tree clean'),
-      );
-
-      await expect(
-        executeCommit({ message: 'empty commit' }, mockContext, mockExecGit),
-      ).rejects.toThrow();
-    });
+  it('rejects incomplete hashes and object identity mismatches', async () => {
+    execute
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })
+      .mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' });
+    await expect(run()).rejects.toThrow(/identity/);
+    expect(
+      calls.filter((args) => args[0] === 'commit').length,
+    ).toBeLessThanOrEqual(1);
   });
 });
