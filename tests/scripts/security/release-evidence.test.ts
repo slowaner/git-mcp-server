@@ -13,6 +13,10 @@ import {
   type ReleaseOperations,
   type ReleaseSource,
 } from '../../../scripts/security/release-evidence.js';
+import {
+  MCP_REGISTRY,
+  publisherDestinationGate,
+} from '../../../scripts/security/release-publisher-destination.js';
 
 const commit = 'a'.repeat(40);
 const reviewed = { commit, tag: 'v1.2.3' };
@@ -52,8 +56,15 @@ function source(): ReleaseSource {
   };
 }
 
-function fixture() {
+function fixture(withExplicitFalse = false) {
   let current = source();
+  if (withExplicitFalse) {
+    const manifest = JSON.parse(current.serverJson);
+    manifest.packages[0].environmentVariables = [
+      { name: 'FIXTURE', isRequired: false },
+    ];
+    current.serverJson = JSON.stringify(manifest);
+  }
   const calls: string[] = [];
   const bytes = Object.fromEntries(
     Object.entries({
@@ -90,6 +101,12 @@ function fixture() {
     verifyBundle: async (value) => {
       calls.push('verify');
       verifyBundleFiles(value, bytes);
+    },
+    preflightPublication: async () => {
+      calls.push('preflight');
+    },
+    recordPublication: async (action) => {
+      calls.push(`action:${action.destination}:${action.stage}`);
     },
     publish: async (_value, destination) => {
       calls.push(`publish:${destination}`);
@@ -197,14 +214,22 @@ describe('release protocol dry runs', () => {
     expect(f.calls.slice(6)).toEqual([
       'snapshot',
       'verify',
+      'preflight',
+      'action:npm:attempted',
       'publish:npm',
+      'action:npm:uploaded-unverified',
       'receipt:npm',
       'save:npm',
+      'action:npm:verified',
       'snapshot',
       'verify',
+      'preflight',
+      'action:mcp:attempted',
       'publish:mcp',
+      'action:mcp:uploaded-unverified',
       'receipt:mcp',
       'save:mcp',
+      'action:mcp:verified',
     ]);
   });
 
@@ -313,5 +338,74 @@ describe('release protocol dry runs', () => {
     );
     expect(f.calls.includes('save:npm')).toBe(true);
     expect(f.calls.includes('save:mcp')).toBe(false);
+    expect(f.calls.includes('action:mcp:upload-failed-or-unknown')).toBe(true);
+  });
+  for (const target of [
+    'https://staging.example.test',
+    MCP_REGISTRY + '/other',
+  ]) {
+    it('rejects an unsupported effective MCP target before EITHER upload', async () => {
+      const f = fixture();
+      const preflight = publisherDestinationGate(async () => ({
+        home: '/fixture',
+        bytes: Buffer.from(
+          JSON.stringify({ token: 'fixture', registry: target }),
+        ),
+      }));
+      f.ops.preflightPublication = async () => {
+        await preflight();
+      };
+      await expect(runRelease(reviewed, f.ops, true)).rejects.toThrow(
+        'destination',
+      );
+      expect(
+        f.calls.some(
+          (call) => call.startsWith('publish:') || call.startsWith('action:'),
+        ),
+      ).toBe(false);
+    });
+  }
+  it('retains completed MCP upload evidence when subsequent verification fails', async () => {
+    const f = fixture();
+    const receipt = f.ops.receipt;
+    f.ops.receipt = async (bundle, destination) =>
+      destination === 'npm'
+        ? receipt(bundle, destination)
+        : {
+            destination,
+            identity: pkg.mcpName,
+            version: pkg.version,
+            sha256: 'f'.repeat(64),
+          };
+    await expect(runRelease(reviewed, f.ops, true)).rejects.toThrow(
+      'Unverified mcp',
+    );
+    expect(f.calls.includes('save:npm')).toBe(true);
+    expect(f.calls.includes('action:mcp:uploaded-unverified')).toBe(true);
+    expect(f.calls.includes('action:mcp:verification-failed')).toBe(true);
+    expect(f.calls.includes('save:mcp')).toBe(false);
+    expect(f.calls.includes('action:mcp:verified')).toBe(false);
+  });
+  it('binds successful wire-hash receipts to the original explicit-false source', async () => {
+    const f = fixture(true);
+    const sourceBytes = f.bytes['server.json'];
+    expect(
+      JSON.parse(Buffer.from(sourceBytes!).toString()).packages[0]
+        .environmentVariables[0].isRequired,
+    ).toBe(false);
+    expect(
+      JSON.parse(Buffer.from(f.bytes['registry-manifest.json']!).toString())
+        .packages[0].environmentVariables[0],
+    ).toEqual({ name: 'FIXTURE' });
+    f.ops.preflightPublication = async () => {
+      const check = publisherDestinationGate(async () => ({
+        home: '/fixture',
+        bytes: Buffer.from('{"token":"fixture"}'),
+      }));
+      expect(await check()).toBe(MCP_REGISTRY);
+    };
+    await runRelease(reviewed, f.ops, true);
+    expect(f.bytes['server.json']).toEqual(sourceBytes);
+    expect(f.calls.includes('save:mcp')).toBe(true);
   });
 });

@@ -3,7 +3,7 @@
  * @module tests/scripts/security/sarif-result
  */
 import { describe, expect, it } from 'bun:test';
-import { evaluateSarif } from '../../../scripts/check-sarif.js';
+import { evaluateSarif, inspectSarif } from '../../../scripts/check-sarif.js';
 
 function report(severity?: string) {
   return {
@@ -55,5 +55,61 @@ describe('CodeQL result gate', () => {
     const partial = report('8.0');
     partial.runs[0]!.tool.driver.rules = [];
     expect(evaluateSarif(partial)).toBe('error');
+  });
+  it('reports every rejection class with fixed payload-free reasons', () => {
+    const clean = report('6');
+    const run = clean.runs[0]!;
+    const wrap = (value: unknown) => ({ ...clean, runs: [value] });
+    const cases: [unknown, ReturnType<typeof inspectSarif>['reason']][] = [
+      [{}, 'root-shape'],
+      [wrap({ ...run, invocations: [] }), 'run-shape'],
+      [
+        wrap({ ...run, invocations: [{ executionSuccessful: false }] }),
+        'unsuccessful-invocation',
+      ],
+      [
+        wrap({
+          ...run,
+          invocations: [
+            {
+              executionSuccessful: true,
+              toolExecutionNotifications: [
+                { level: 'error', message: { text: 'PRIVATE_FIXTURE_MARKER' } },
+              ],
+            },
+          ],
+        }),
+        'notifications',
+      ],
+      [wrap({ ...run, results: [{ ruleId: 9 }] }), 'result-shape'],
+      [
+        wrap({ ...run, results: [{ ruleId: 'PRIVATE_FIXTURE_MARKER' }] }),
+        'missing-rule',
+      ],
+      [report('PRIVATE_FIXTURE_MARKER'), 'unsupported-severity'],
+    ];
+    for (const [input, reason] of cases) {
+      const diagnostic = inspectSarif(input);
+      expect(diagnostic.outcome).toBe('error');
+      expect(diagnostic.reason).toBe(reason);
+      expect(evaluateSarif(input)).toBe('error');
+      expect(JSON.stringify(diagnostic)).not.toContain(
+        'PRIVATE_FIXTURE_MARKER',
+      );
+      expect(JSON.stringify(diagnostic).length).toBeLessThan(512);
+    }
+    expect(inspectSarif(wrap({ ...run, invocations: [] }))).toMatchObject({
+      run: 0,
+      invocations: 0,
+      present: { invocations: true, results: true, driver: true, rules: true },
+    });
+    expect(inspectSarif(report())).toEqual({
+      outcome: 'allowed',
+      reason: 'allowed',
+    });
+    expect(inspectSarif(report('7'))).toEqual({
+      outcome: 'findings',
+      reason: 'security-findings',
+    });
   });
 });

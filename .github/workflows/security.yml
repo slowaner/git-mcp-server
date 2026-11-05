@@ -98,10 +98,13 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-bun-pinned
       - name: Install exact locked dependencies without lifecycle scripts
         run: bun install --frozen-lockfile --ignore-scripts
+      - name: Build current source before production consumer tests
+        run: bun run rebuild
       - name: Require and record native security oracle profile
         shell: bash
         run: |

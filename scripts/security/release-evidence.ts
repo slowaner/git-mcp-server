@@ -3,6 +3,7 @@
  * @module scripts/security/release-evidence
  */
 import { createHash } from 'node:crypto';
+import { publisherWireManifest } from './release-publisher-wire.js';
 
 /** SHA-256 identifies bytes, independent of paths or timestamps. */
 export function sha256(bytes: string | Uint8Array): string {
@@ -26,9 +27,7 @@ export function canonicalJson(value: unknown): string {
 
 /** Hash the exact MCP payload separately from source metadata with legacy mcpName. */
 export function registryManifest(source: string): string {
-  const value = record(JSON.parse(source));
-  const { mcpName: _legacy, ...manifest } = value;
-  return canonicalJson(manifest);
+  return canonicalJson(publisherWireManifest(source));
 }
 
 /** Source evidence collected with argv-based Git calls in the release checkout. */
@@ -204,12 +203,25 @@ export interface PublicationReceipt {
   sha256: string;
 }
 
+/** Persist known effects independently of whether receipt verification succeeds. */
+export interface PublicationAction {
+  destination: 'npm' | 'mcp';
+  stage:
+    | 'attempted'
+    | 'uploaded-unverified'
+    | 'upload-failed-or-unknown'
+    | 'verification-failed'
+    | 'verified';
+}
+
 /** Injectable side effects allow dry-run regression tests without registry access. */
 export interface ReleaseOperations {
   snapshot(): Promise<ReleaseSource>;
   checks(): Promise<void>;
   buildBundle(source: ReleaseIdentity): Promise<ReleaseBundle>;
   verifyBundle(bundle: ReleaseBundle): Promise<void>;
+  preflightPublication(): Promise<void>;
+  recordPublication(action: PublicationAction): Promise<void>;
   publish(bundle: ReleaseBundle, destination: 'npm' | 'mcp'): Promise<void>;
   receipt(
     bundle: ReleaseBundle,
@@ -248,23 +260,43 @@ export async function runRelease(
   for (const destination of ['npm', 'mcp'] as const) {
     await assertUnchanged();
     await ops.verifyBundle(bundle);
-    await ops.publish(bundle, destination);
-    const receipt = await ops.receipt(bundle, destination);
+    await ops.preflightPublication();
+    await ops.recordPublication({ destination, stage: 'attempted' });
+    try {
+      await ops.publish(bundle, destination);
+    } catch (error) {
+      await ops.recordPublication({
+        destination,
+        stage: 'upload-failed-or-unknown',
+      });
+      throw error;
+    }
+    await ops.recordPublication({ destination, stage: 'uploaded-unverified' });
     const expectedIdentity =
       destination === 'npm' ? source.packageName : source.serverName;
     const expectedHash =
       destination === 'npm'
         ? bundle.files['package.tgz']
         : bundle.files['registry-manifest.json'];
-    if (
-      receipt.destination !== destination ||
-      receipt.version !== source.version ||
-      receipt.identity !== expectedIdentity ||
-      receipt.sha256 !== expectedHash
-    ) {
-      throw new Error(`Unverified ${destination} destination receipt.`);
+    let receipt: PublicationReceipt;
+    try {
+      receipt = await ops.receipt(bundle, destination);
+      if (
+        receipt.destination !== destination ||
+        receipt.version !== source.version ||
+        receipt.identity !== expectedIdentity ||
+        receipt.sha256 !== expectedHash
+      )
+        throw new Error(`Unverified ${destination} destination receipt.`);
+    } catch (error) {
+      await ops.recordPublication({
+        destination,
+        stage: 'verification-failed',
+      });
+      throw error;
     }
     await ops.saveReceipt(receipt);
+    await ops.recordPublication({ destination, stage: 'verified' });
   }
   return bundle;
 }

@@ -49,52 +49,22 @@ import {
   snapshotScannerConfig,
 } from './security/scanner-config.js';
 import { assertZeroSecretScan } from './security/secret-result.js';
+import {
+  completeSourceArchive,
+  sourceTreeEntries,
+} from './security/release-source-archive.js';
+import { publisherDestinationGate } from './security/release-publisher-destination.js';
 
 function sourceArchive(root: string, commit: string): Buffer {
-  const entries = command(
-    ['git', 'ls-tree', '-r', '-z', '--full-tree', commit],
-    root,
-  )
-    .toString('utf8')
-    .split('\0')
-    .filter(Boolean);
-  const names = entries.map((entry) => {
-    const match = /^[0-7]{6} blob [0-9a-f]{40}\t([^\x00-\x1f\x7f]+)$/.exec(
-      entry,
-    );
-    if (!match)
-      throw new Error(
-        'Unsupported source entry; submodules/control paths require separate review.',
-      );
-    return match[1]!;
-  });
-  if (names.length === 0) throw new Error('Empty source tree.');
-  const attrs = command(
-    [
-      'git',
-      'check-attr',
-      '-z',
-      '--cached',
-      'export-ignore',
-      'export-subst',
-      '--',
-      ...names,
-    ],
-    root,
-  )
-    .toString('utf8')
-    .split('\0');
-  attrs.pop();
-  if (attrs.length !== names.length * 6)
-    throw new Error('Incomplete source archive attribute evidence.');
-  for (let index = 2; index < attrs.length; index += 3) {
-    if (!['unspecified', 'unset'].includes(attrs[index]!)) {
-      throw new Error(
-        'Unsupported source archive attributes; remove export transforms before review/tag.',
-      );
-    }
-  }
-  return command(['git', 'archive', '--format=tar', commit], root);
+  const entries = sourceTreeEntries(
+    command(['git', 'ls-tree', '-r', '-z', '--full-tree', commit], root),
+  );
+  return completeSourceArchive(
+    entries.map((entry) => ({
+      ...entry,
+      bytes: command(['git', 'cat-file', 'blob', entry.oid], root),
+    })),
+  );
 }
 
 /** Explicit reviewed source and local archive/bundle inputs. No implicit publication. */
@@ -350,6 +320,8 @@ export function releaseOperations(
     exitCode: number;
     stdoutSha256: string;
   }[] = [];
+  const checkPublisherDestination = publisherDestinationGate();
+  let approvedRegistry: string | undefined;
   return {
     snapshot: () => snapshot(root, options.reviewed),
     checks: async () => {
@@ -366,6 +338,7 @@ export function releaseOperations(
       const commands = [
         [tools.bun, 'install', '--frozen-lockfile', '--ignore-scripts'],
         [tools.bun, join(root, 'scripts/devcheck.ts'), '--no-fix'],
+        [tools.bun, 'run', 'rebuild'],
         [tools.bun, 'test'],
       ];
       for (const args of commands) {
@@ -385,12 +358,6 @@ export function releaseOperations(
           throw new Error('Bundle manifest differs from reviewed digest.');
         return JSON.parse(bytes.toString('utf8')) as ReleaseBundle;
       }
-      const buildResult = command([tools.bun, 'run', 'rebuild'], root, 120_000);
-      checks.push({
-        command: [tools.bun, 'run', 'rebuild'],
-        exitCode: 0,
-        stdoutSha256: sha256(buildResult),
-      });
       await mkdir(options.output, { mode: 0o700 });
       const current = await snapshot(root, options.reviewed);
       const build = await buildFiles(root);
@@ -509,8 +476,16 @@ export function releaseOperations(
         Buffer.from(files['package.json']!).toString('utf8'),
       );
     },
+    preflightPublication: async () => {
+      if (!options.publish || !tools.publisher)
+        throw new Error('Pinned publication inputs required.');
+      approvedRegistry = await checkPublisherDestination();
+    },
     publish: async (_bundle, destination) => {
-      if (!options.publish) throw new Error('Publication was not requested.');
+      if (!options.publish || !approvedRegistry)
+        throw new Error('Publication preflight required.');
+      if ((await checkPublisherDestination()) !== approvedRegistry)
+        throw new Error('Publisher destination drift.');
       if (destination === 'npm')
         command(
           [
@@ -563,10 +538,11 @@ export function releaseOperations(
           ),
         };
       }
+      if (!approvedRegistry) throw new Error('Publication preflight required.');
       const info = JSON.parse(
         Buffer.from(
           await responseBytes(
-            `https://registry.modelcontextprotocol.io/v0.1/servers/${encodeURIComponent(source.serverName)}/versions/${encodeURIComponent(source.version)}`,
+            `${approvedRegistry}/v0.1/servers/${encodeURIComponent(source.serverName)}/versions/${encodeURIComponent(source.version)}`,
             4 * 1024 * 1024,
           ),
         ).toString('utf8'),
@@ -594,6 +570,28 @@ export function releaseOperations(
             checkedAt: new Date().toISOString(),
             reviewed: options.reviewed,
             bundleSha256: options.bundleDigest,
+          },
+          null,
+          2,
+        ) + '\n',
+        { flag: 'wx', mode: 0o400 },
+      );
+    },
+    recordPublication: async (action) => {
+      const directory = `${options.output}.receipts`;
+      await mkdir(directory, { mode: 0o700, recursive: true });
+      await writeFile(
+        join(directory, `${action.destination}.${action.stage}.json`),
+        JSON.stringify(
+          {
+            ...action,
+            reviewed: options.reviewed,
+            bundleSha256: options.bundleDigest,
+            registry:
+              action.destination === 'mcp'
+                ? approvedRegistry
+                : 'https://registry.npmjs.org',
+            checkedAt: new Date().toISOString(),
           },
           null,
           2,

@@ -4,7 +4,15 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { releaseOperations } from '../../../scripts/release.js';
@@ -16,6 +24,7 @@ import { synchronizedMetadata } from '../../../scripts/security/release-metadata
 import ts from 'typescript';
 import { snapshotScannerConfig } from '../../../scripts/security/scanner-config.js';
 import { assertZeroSecretScan } from '../../../scripts/security/secret-result.js';
+import { sourceTreeEntries } from '../../../scripts/security/release-source-archive.js';
 
 const scanner = Bun.which('gitleaks');
 
@@ -39,15 +48,9 @@ function command(root: string, args: string[], quietErrors = false): string {
 }
 
 describe('real release preparation profile', () => {
-  for (const attributes of [
-    '',
-    'src/index.ts export-ignore\n',
-    'src/index.ts export-subst\n',
-  ]) {
+  for (const profile of ['none', 'ignore', 'subst', 'repository'] as const) {
     (scanner ? it : it.skip)(
-      attributes
-        ? `rejects source export attributes ${attributes.trim()}`
-        : 'builds and verifies a source/lock/build/manifest bundle without publication',
+      `preserves complete reviewed source with ${profile} attributes without publication`,
       async () => {
         const parent = await mkdtemp(join(tmpdir(), 'g6-release-fixture-'));
         const root = join(parent, 'source');
@@ -63,6 +66,15 @@ describe('real release preparation profile', () => {
           await mkdir(root);
           await mkdir(join(root, 'src'));
           await mkdir(join(root, 'scripts'));
+          const attributes =
+            profile === 'repository'
+              ? await readFile(
+                  new URL('../../../.gitattributes', import.meta.url),
+                  'utf8',
+                )
+              : profile === 'none'
+                ? ''
+                : `src/index.ts export-${profile}\n`;
           if (attributes)
             await writeFile(join(root, '.gitattributes'), attributes);
           const pkg = {
@@ -93,11 +105,16 @@ describe('real release preparation profile', () => {
           );
           await writeFile(
             join(root, 'src/index.ts'),
-            'export const fixture = "checked source";\n',
+            '// $Format:%H$\nexport const fixture = "checked source";\n',
           );
           await writeFile(
+            join(root, 'CLAUDE.md'),
+            'Reviewed fixture instructions.\n',
+          );
+          await symlink('CLAUDE.md', join(root, 'AGENTS.md'));
+          await writeFile(
             join(root, 'fixture.test.ts'),
-            'import { expect, test } from "bun:test"; import { fixture } from "./src/index.ts"; test("source", () => expect(fixture).toBe("checked source"));\n',
+            'import { expect, test } from "bun:test"; import { fixture } from "./dist/index.js"; test("current build", () => expect(fixture).toBe("checked source"));\n',
           );
           await writeFile(
             join(root, 'scripts/devcheck.ts'),
@@ -192,12 +209,12 @@ describe('real release preparation profile', () => {
             bun: process.execPath,
             gitleaks: scanner!,
           });
-          if (attributes) {
-            await expect(runRelease(reviewed, ops)).rejects.toThrow(
-              'source archive attributes',
-            );
-            return;
-          }
+          // An ignored stale bundle must be rebuilt before the compiled consumer test.
+          await mkdir(join(root, 'dist'));
+          await writeFile(
+            join(root, 'dist/index.js'),
+            'export const fixture = "stale build";\n',
+          );
           const bundle = await runRelease(reviewed, ops);
           expect(bundle.source.commit).toBe(reviewed.commit);
           expect(bundle.files['package.tgz']).toBe(
@@ -208,6 +225,66 @@ describe('real release preparation profile', () => {
           expect(
             await readFile(join(output, 'provenance.json'), 'utf8'),
           ).toContain(reviewed.commit);
+          const extracted = join(parent, 'complete-source');
+          await mkdir(extracted);
+          command(root, [
+            'tar',
+            '-xf',
+            join(output, 'source.tar'),
+            '-C',
+            extracted,
+          ]);
+          const treeBytes = spawnSync(
+            'git',
+            ['ls-tree', '-r', '-z', '--full-tree', reviewed.commit],
+            { cwd: root },
+          );
+          expect(treeBytes.status).toBe(0);
+          const entries = sourceTreeEntries(treeBytes.stdout);
+          expect(
+            command(root, ['tar', '-tf', join(output, 'source.tar')])
+              .split('\n')
+              .sort(),
+          ).toEqual(entries.map((entry) => entry.path).sort());
+          for (const entry of entries) {
+            const blob = spawnSync('git', ['cat-file', 'blob', entry.oid], {
+              cwd: root,
+            });
+            expect(blob.status).toBe(0);
+            const actual =
+              entry.mode === '120000'
+                ? Buffer.from(await readlink(join(extracted, entry.path)))
+                : await readFile(join(extracted, entry.path));
+            expect(actual).toEqual(blob.stdout);
+          }
+          expect(
+            await readFile(join(extracted, 'CLAUDE.md'), 'utf8'),
+          ).toContain('Reviewed fixture');
+          expect(
+            await readFile(join(extracted, 'scripts/devcheck.ts'), 'utf8'),
+          ).toContain('--no-fix');
+          expect(
+            await readFile(join(extracted, 'fixture.test.ts'), 'utf8'),
+          ).toContain('current build');
+          expect(
+            await readFile(join(extracted, 'src/index.ts'), 'utf8'),
+          ).toContain('$Format:%H$');
+          if (attributes) {
+            // Even a rewritten artifact hash cannot bless an attribute-transformed export.
+            const transformed = spawnSync(
+              'git',
+              ['archive', '--format=tar', reviewed.commit],
+              { cwd: root },
+            );
+            expect(transformed.status).toBe(0);
+            await rm(join(output, 'source.tar'));
+            await writeFile(join(output, 'source.tar'), transformed.stdout);
+            const altered = structuredClone(bundle);
+            altered.files['source.tar'] = sha256(transformed.stdout);
+            await expect(ops.verifyBundle(altered)).rejects.toThrow(
+              'Source archive differs',
+            );
+          }
         } catch (error) {
           const bytes = await readFile(join(root, 'bun.lock'), 'utf8');
           const parsed = ts.parseConfigFileTextToJson('bun.lock', bytes).config;
