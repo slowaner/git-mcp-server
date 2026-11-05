@@ -11,6 +11,7 @@ import type { StatusCode } from 'hono/utils/http-status';
 import type { HonoNodeBindings } from '@/mcp-server/transports/http/httpTypes.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { ErrorHandler, logger, requestContextService } from '@/utils/index.js';
+import { HttpLimitError } from './httpSecurity.js';
 
 /**
  * A centralized error handling middleware for Hono.
@@ -21,10 +22,21 @@ import { ErrorHandler, logger, requestContextService } from '@/utils/index.js';
  * @param c - The Hono context object for the request.
  * @returns A Response object containing the formatted JSON-RPC error.
  */
-export const httpErrorHandler = async (
+export const httpErrorHandler = (
   err: Error,
   c: Context<{ Bindings: HonoNodeBindings }>,
-): Promise<Response> => {
+): Response => {
+  if (err instanceof HttpLimitError) {
+    if (err.status === 429 || err.status === 503) c.header('Retry-After', '60');
+    return c.json(
+      {
+        jsonrpc: '2.0',
+        error: { code: -32000, message: err.message },
+        id: null,
+      },
+      err.status,
+    );
+  }
   const context = requestContextService.createRequestContext({
     operation: 'httpErrorHandler',
     additionalContext: {
@@ -71,36 +83,8 @@ export const httpErrorHandler = async (
     errorCode: (handledError as McpError).code,
   });
 
-  // Attempt to get the request ID from the body, but don't fail if it's not there or unreadable.
-  let requestId: string | number | null = null;
-  // Only attempt to read the body if it hasn't been consumed already.
-  if (c.req.raw.bodyUsed === false) {
-    try {
-      const body: unknown = await c.req.json();
-      if (body && typeof body === 'object' && 'id' in body) {
-        const id = (body as Record<string, unknown>).id;
-        requestId =
-          typeof id === 'string' || typeof id === 'number' ? id : null;
-      } else {
-        requestId = null;
-      }
-      logger.debug('Extracted JSON-RPC request ID from body.', {
-        ...context,
-        jsonRpcId: requestId,
-      });
-    } catch {
-      logger.warning(
-        'Could not parse request body to extract JSON-RPC ID.',
-        context,
-      );
-      // Ignore parsing errors, requestId will remain null
-    }
-  } else {
-    logger.debug(
-      'Request body already consumed, cannot extract JSON-RPC ID.',
-      context,
-    );
-  }
+  // Error paths, including rejected auth, never read or parse client bodies.
+  const requestId = null;
 
   const errorCode =
     handledError instanceof McpError ? handledError.code : -32603;

@@ -15,6 +15,10 @@ import { z } from 'zod';
 
 import packageJson from '../../package.json' with { type: 'json' };
 import { JsonRpcErrorCode, McpError } from '../types-global/errors.js';
+import {
+  HttpSecuritySchema,
+  ToolInputLimitsSchema,
+} from '../mcp-server/transports/http/httpSecurity.js';
 
 type PackageManifest = {
   name?: string;
@@ -166,14 +170,63 @@ const ConfigSchema = z.object({
     emptyStringAsUndefined,
     z.enum(['minimal', 'standard', 'full']).default('standard'),
   ),
-  mcpHttpPort: z.coerce.number().default(3015),
+  mcpHttpPort: z.coerce.number().int().min(1).max(65535).default(3015),
   mcpHttpHost: z.string().default('127.0.0.1'),
   mcpHttpEndpointPath: z.string().default('/mcp'),
   mcpHttpMaxPortRetries: z.coerce.number().default(15),
   mcpHttpPortRetryDelayMs: z.coerce.number().default(50),
-  mcpStatefulSessionStaleTimeoutMs: z.coerce.number().default(1_800_000),
-  mcpAllowedOrigins: z.array(z.string()).optional(),
+  mcpStatefulSessionStaleTimeoutMs: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(86400000)
+    .default(1_800_000),
+  mcpAllowedOrigins: z
+    .array(
+      z.string().refine((origin) => {
+        try {
+          const url = new URL(origin);
+          return (
+            ['http:', 'https:'].includes(url.protocol) && url.origin === origin
+          );
+        } catch {
+          return false;
+        }
+      }, 'Expected an exact HTTP(S) origin, without wildcard, credentials or path.'),
+    )
+    .max(64)
+    .optional(),
+  httpSecurity: HttpSecuritySchema,
+  toolInputLimits: ToolInputLimitsSchema,
   mcpAuthSecretKey: z.string().optional(),
+  mcpAuthIssuer: z
+    .string()
+    .optional()
+    .describe('Expected JWT issuer; enforced by auth policy.'),
+  mcpAuthAudience: z
+    .string()
+    .optional()
+    .describe('Expected JWT audience; enforced by auth policy.'),
+  mcpAuthMaxTokenLifetimeSeconds: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(86400)
+    .default(3600)
+    .describe('Maximum accepted JWT lifetime.'),
+  mcpAuthClockToleranceSeconds: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(60)
+    .default(5)
+    .describe('JWT clock skew tolerance.'),
+  mcpRepositoryGrants: z
+    .string()
+    .optional()
+    .describe(
+      'JSON repository grants; validated by the auth repository policy.',
+    ),
   mcpAuthMode: z.preprocess(
     emptyStringAsUndefined,
     z.enum(['jwt', 'oauth', 'none']).default('none'),
@@ -334,7 +387,38 @@ const parseConfig = () => {
     mcpAllowedOrigins: env.MCP_ALLOWED_ORIGINS?.split(',')
       .map((o) => o.trim())
       .filter(Boolean),
+    httpSecurity: {
+      allowedHosts: env.MCP_HTTP_ALLOWED_HOSTS?.split(',')
+        .map((host) => host.trim())
+        .filter(Boolean),
+      allowNativeClients: env.MCP_HTTP_ALLOW_NATIVE_CLIENTS,
+      maxBodyBytes: env.MCP_HTTP_MAX_BODY_BYTES,
+      bodyTimeoutMs: env.MCP_HTTP_BODY_TIMEOUT_MS,
+      requestTimeoutMs: env.MCP_HTTP_REQUEST_TIMEOUT_MS,
+      streamTimeoutMs: env.MCP_HTTP_STREAM_TIMEOUT_MS,
+      maxRequests: env.MCP_HTTP_MAX_REQUESTS,
+      maxRequestsPerPrincipal: env.MCP_HTTP_MAX_REQUESTS_PER_PRINCIPAL,
+      maxInitializations: env.MCP_HTTP_MAX_INITIALIZATIONS,
+      maxSessions: env.MCP_HTTP_MAX_SESSIONS,
+      maxSessionsPerPrincipal: env.MCP_HTTP_MAX_SESSIONS_PER_PRINCIPAL,
+      maxStreams: env.MCP_HTTP_MAX_STREAMS,
+      maxStreamsPerPrincipal: env.MCP_HTTP_MAX_STREAMS_PER_PRINCIPAL,
+      requestsPerMinute: env.MCP_HTTP_REQUESTS_PER_MINUTE,
+      maxPrincipals: env.MCP_HTTP_MAX_PRINCIPALS,
+    },
+    toolInputLimits: {
+      maxElements: env.MCP_TOOL_MAX_ELEMENTS,
+      maxArrayLength: env.MCP_TOOL_MAX_ARRAY_LENGTH,
+      maxRecordKeys: env.MCP_TOOL_MAX_RECORD_KEYS,
+      maxDepth: env.MCP_TOOL_MAX_DEPTH,
+      maxStringBytes: env.MCP_TOOL_MAX_STRING_BYTES,
+    },
     mcpAuthSecretKey: env.MCP_AUTH_SECRET_KEY,
+    mcpAuthIssuer: env.MCP_AUTH_ISSUER,
+    mcpAuthAudience: env.MCP_AUTH_AUDIENCE,
+    mcpAuthMaxTokenLifetimeSeconds: env.MCP_AUTH_MAX_TOKEN_LIFETIME_SECONDS,
+    mcpAuthClockToleranceSeconds: env.MCP_AUTH_CLOCK_TOLERANCE_SECONDS,
+    mcpRepositoryGrants: env.MCP_REPOSITORY_GRANTS,
     mcpAuthMode: env.MCP_AUTH_MODE,
     oauthIssuerUrl: env.OAUTH_ISSUER_URL,
     oauthJwksUri: env.OAUTH_JWKS_URI,

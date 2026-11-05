@@ -1,6 +1,6 @@
 /**
  * @fileoverview Configures and starts the HTTP MCP transport using Hono.
- * This implementation uses the official @hono/mcp package for a fully
+ * This implementation uses the official MCP SDK transport for a fully
  * web-standard, platform-agnostic transport layer.
  *
  * Architecture: Each MCP session gets its own McpServer + StreamableHTTPTransport
@@ -12,13 +12,26 @@
  * @see {@link https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http | MCP Streamable HTTP Transport}
  * @module src/mcp-server/transports/http/httpTransport
  */
-import { StreamableHTTPTransport } from '@hono/mcp';
+import { WebStandardStreamableHTTPServerTransport as StreamableHTTPTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { type ServerType, serve } from '@hono/node-server';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import http from 'http';
 import { randomUUID } from 'node:crypto';
+import { HttpAdmission } from './httpAdmission.js';
+import {
+  checkContentLength,
+  HttpLimitError,
+  readBoundedJson,
+  validateHttpPeer,
+} from './httpSecurity.js';
+import {
+  boundResponseLifetime,
+  createServerWithinDeadline,
+  dispatchWithDeadline,
+} from './httpLifetime.js';
+import { httpPrincipalKey } from './httpPrincipal.js';
 
 import { config } from '@/config/index.js';
 import {
@@ -37,7 +50,36 @@ import {
 
 /** Factory function that creates a fully-configured McpServer instance. */
 export type McpServerFactory = () => Promise<McpServer>;
+const appManagers = new WeakMap<
+  Hono<{ Bindings: HonoNodeBindings }>,
+  SessionManager
+>();
+const serverManagers = new WeakMap<ServerType, SessionManager>();
+const appDisposers = new WeakMap<
+  Hono<{ Bindings: HonoNodeBindings }>,
+  () => Promise<void>
+>();
+const serverApps = new WeakMap<
+  ServerType,
+  Hono<{ Bindings: HonoNodeBindings }>
+>();
+const defaultAppHosts = new WeakMap<
+  Hono<{ Bindings: HonoNodeBindings }>,
+  string[]
+>();
+const loopbackAuthorities = (port: number) =>
+  ['localhost', '127.0.0.1', '[::1]'].map(
+    (host) => new URL(`http://${host}:${port}`).host,
+  );
 
+/** Close every per-app session and timer; used by shutdown and embedded hosts. */
+export async function closeHttpApp(
+  app: Hono<{ Bindings: HonoNodeBindings }>,
+): Promise<void> {
+  await appDisposers.get(app)?.();
+}
+
+/** Compose an isolated HTTP app with rejecting peer checks and bounded admission. */
 export function createHttpApp(
   createMcpServer: McpServerFactory,
   parentContext: RequestContext,
@@ -51,23 +93,54 @@ export function createHttpApp(
   // Per-session transport map. Each session gets its own McpServer + Transport pair
   // because Protocol maintains a 1:1 relationship with its transport.
   const transports = new Map<string, StreamableHTTPTransport>();
+  const servers = new Map<string, McpServer>();
+  const sessionReleases = new Map<string, () => void>();
+  const admission = new HttpAdmission(config.httpSecurity);
+  const policy = config.httpSecurity;
+  const hosts = policy.allowedHosts.length
+    ? policy.allowedHosts
+    : loopbackAuthorities(config.mcpHttpPort);
+  if (!policy.allowedHosts.length) defaultAppHosts.set(app, hosts);
+  const principal = httpPrincipalKey;
+  let closing = false;
+  const cleanupTasks = new Map<string, Promise<void>>();
+  const cleanup = (sid: string): Promise<void> => {
+    const existing = cleanupTasks.get(sid);
+    if (existing) return existing;
+    const pending = (async () => {
+      const transport = transports.get(sid);
+      const server = servers.get(sid);
+      transports.delete(sid);
+      servers.delete(sid);
+      sessionManager.terminateSession(sid);
+      // Release only after close completes; failed close must not open new capacity.
+      try {
+        await server?.close();
+        await transport?.close();
+        sessionReleases.get(sid)?.();
+        sessionReleases.delete(sid);
+      } catch {
+        logger.warning('HTTP session cleanup failed', transportContext);
+      }
+    })();
+    cleanupTasks.set(sid, pending);
+    return pending.finally(() => cleanupTasks.delete(sid));
+  };
 
   // Initialize SessionManager with configurable timeout and transport cleanup
-  const sessionManager = SessionManager.getInstance(
+  const sessionManager = new SessionManager(
     config.mcpStatefulSessionStaleTimeoutMs,
+    Math.min(60000, config.mcpStatefulSessionStaleTimeoutMs),
   );
+  appManagers.set(app, sessionManager);
+  appDisposers.set(app, async () => {
+    closing = true;
+    sessionManager.stopCleanupInterval();
+    await Promise.all([...transports.keys()].map(cleanup));
+    await Promise.all(cleanupTasks.values());
+  });
   sessionManager.onSessionExpired = (sessionId: string) => {
-    const transport = transports.get(sessionId);
-    if (transport) {
-      transport.close().catch((err) => {
-        logger.warning('Failed to close transport for expired session', {
-          ...transportContext,
-          sessionId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-      transports.delete(sessionId);
-    }
+    void cleanup(sessionId);
   };
   logger.info('Session manager initialized', {
     ...transportContext,
@@ -76,16 +149,40 @@ export function createHttpApp(
 
   // CORS configuration
   const explicitOrigins = config.mcpAllowedOrigins;
-  const allowedOrigin: string | string[] =
-    explicitOrigins && explicitOrigins.length > 0 ? explicitOrigins : '*';
+  const allowedOrigin = explicitOrigins ?? [];
 
-  if (allowedOrigin === '*' && config.environment === 'production') {
-    logger.warning(
-      'MCP_ALLOWED_ORIGINS is not configured. CORS will allow all origins. ' +
-        'Set MCP_ALLOWED_ORIGINS to restrict cross-origin access in production.',
-      transportContext,
-    );
-  }
+  let ingress = 0;
+  // First middleware: ignore all forwarded headers; Host and Origin are direct.
+  app.use('*', async (c, next) => {
+    try {
+      validateHttpPeer(
+        c.req.raw,
+        hosts,
+        allowedOrigin,
+        policy.allowNativeClients,
+      );
+      checkContentLength(c.req.raw, policy.maxBodyBytes);
+      if (ingress >= policy.maxRequests)
+        throw new HttpLimitError(429, 'HTTP ingress capacity reached.');
+      ingress++;
+      try {
+        await next();
+      } finally {
+        ingress--;
+      }
+      return;
+    } catch (error) {
+      if (!(error instanceof HttpLimitError)) throw error;
+      return c.json(
+        {
+          jsonrpc: '2.0',
+          error: { code: -32000, message: error.message },
+          id: null,
+        },
+        error.status,
+      );
+    }
+  });
 
   app.use(
     '*',
@@ -99,7 +196,7 @@ export function createHttpApp(
         'MCP-Protocol-Version',
       ],
       exposeHeaders: ['Mcp-Session-Id'],
-      credentials: true,
+      credentials: false,
     }),
   );
 
@@ -144,6 +241,24 @@ export function createHttpApp(
     );
   }
 
+  // No queue: admission fails immediately. Leases persist through response streams.
+  app.use(config.mcpHttpEndpointPath, async (c, next) => {
+    if (closing) throw new HttpLimitError(503, 'HTTP app is closing.');
+    const release = admission.acquire('requests', principal());
+    try {
+      await next();
+      c.res = boundResponseLifetime(
+        c.res,
+        release,
+        policy.requestTimeoutMs,
+        c.req.raw.signal,
+      );
+    } catch (error) {
+      release();
+      throw error;
+    }
+  });
+
   // Helper: look up a transport for an existing session, returning a 404 JSON-RPC
   // error response if not found or expired.
   const getSessionTransport = (
@@ -153,8 +268,7 @@ export function createHttpApp(
       // Clean up stale transport if it exists
       const stale = transports.get(sessionId);
       if (stale) {
-        stale.close().catch(() => {});
-        transports.delete(sessionId);
+        void cleanup(sessionId);
       }
       return Response.json(
         {
@@ -208,8 +322,19 @@ export function createHttpApp(
     const transportOrError = getSessionTransport(sessionId);
     if (transportOrError instanceof Response) return transportOrError;
 
-    const response = await transportOrError.handleRequest(c);
-    return response ?? c.body(null, 204);
+    const release = admission.acquire('streams', principal());
+    try {
+      const response = await transportOrError.handleRequest(c.req.raw);
+      return boundResponseLifetime(
+        response,
+        release,
+        policy.streamTimeoutMs,
+        c.req.raw.signal,
+      );
+    } catch (error) {
+      release();
+      throw error;
+    }
   });
 
   // DELETE /mcp — session termination (MCP Spec 2025-06-18)
@@ -246,11 +371,10 @@ export function createHttpApp(
     }
 
     // Delegate to transport's internal DELETE handling (closes streams)
-    const response = await transport.handleRequest(c);
+    const response = await transport.handleRequest(c.req.raw);
 
     // Clean up our maps
-    transports.delete(sessionId);
-    sessionManager.terminateSession(sessionId);
+    await cleanup(sessionId);
 
     logger.info('Session terminated via DELETE', {
       ...transportContext,
@@ -270,6 +394,11 @@ export function createHttpApp(
     });
 
     const sessionId = c.req.header('mcp-session-id');
+    const body = await readBoundedJson(
+      c.req.raw,
+      policy,
+      config.toolInputLimits,
+    );
 
     const handleRequest = async (): Promise<Response> => {
       // Existing session — delegate to stored transport
@@ -277,41 +406,113 @@ export function createHttpApp(
         const transportOrError = getSessionTransport(sessionId);
         if (transportOrError instanceof Response) return transportOrError;
 
-        const response = await transportOrError.handleRequest(c);
-        return response ?? c.body(null, 204);
+        try {
+          return await dispatchWithDeadline(
+            transportOrError,
+            c.req.raw,
+            body,
+            policy.requestTimeoutMs,
+          );
+        } catch (error) {
+          // Close cancelled transport correlations; reconnect requires initialization.
+          if (error instanceof HttpLimitError && error.status === 408)
+            await cleanup(sessionId);
+          throw error;
+        }
       }
 
       // New session — create per-session McpServer + Transport pair.
       // Each Protocol instance supports exactly one transport connection.
-      const server = await createMcpServer();
-      const transport = new StreamableHTTPTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (sid: string) => {
-          transports.set(sid, transport);
-          const store = authContext.getStore();
-          sessionManager.createSession(
-            sid,
-            store?.authInfo.clientId,
-            store?.authInfo.tenantId,
-          );
-          logger.debug('New MCP session initialized', {
-            ...transportContext,
-            sessionId: sid,
-          });
-        },
-        onsessionclosed: (sid: string) => {
-          transports.delete(sid);
-          sessionManager.terminateSession(sid);
-          logger.debug('MCP session closed via transport', {
-            ...transportContext,
-            sessionId: sid,
-          });
-        },
-      });
+      // Validate the full initialization envelope before allocating server/transport.
+      const { JSONRPCRequestSchema, InitializeRequestSchema } =
+        await import('@modelcontextprotocol/sdk/types.js');
+      if (
+        !JSONRPCRequestSchema.safeParse(body).success ||
+        !InitializeRequestSchema.safeParse(body).success
+      ) {
+        throw new HttpLimitError(
+          400,
+          'A valid initialize request is required.',
+        );
+      }
+      const releaseInit = admission.acquire('initializations', principal());
+      let releaseSession: (() => void) | undefined;
+      let server: McpServer | undefined;
+      let initialized: string | undefined;
+      let transport: StreamableHTTPTransport | undefined;
+      let abandonedFactory = false;
+      try {
+        releaseSession = admission.acquire('sessions', principal());
+        server = await createServerWithinDeadline(
+          createMcpServer,
+          c.req.raw,
+          policy.requestTimeoutMs,
+          () => {
+            abandonedFactory = true;
+          },
+          () => {
+            releaseSession?.();
+            releaseInit();
+          },
+        );
+        if (closing) throw new HttpLimitError(503, 'HTTP app is closing.');
+        const activeServer = server;
+        transport = new StreamableHTTPTransport({
+          enableJsonResponse: true,
+          maxRequestBodySize: policy.maxBodyBytes,
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sid: string) => {
+            initialized = sid;
+            transports.set(sid, transport!);
+            servers.set(sid, activeServer);
+            sessionReleases.set(sid, releaseSession!);
+            const store = authContext.getStore();
+            sessionManager.createSession(
+              sid,
+              store?.authInfo.clientId,
+              store?.authInfo.tenantId,
+            );
+            logger.debug('New MCP session initialized', {
+              ...transportContext,
+              sessionId: sid,
+            });
+          },
+          onsessionclosed: (sid: string) => {
+            void cleanup(sid);
+            logger.debug('MCP session closed via transport', {
+              ...transportContext,
+              sessionId: sid,
+            });
+          },
+        });
 
-      await server.connect(transport);
-      const response = await transport.handleRequest(c);
-      return response ?? c.body(null, 204);
+        await server.connect(transport);
+        const response = await dispatchWithDeadline(
+          transport,
+          c.req.raw,
+          body,
+          policy.requestTimeoutMs,
+        );
+        if (!initialized || response.status >= 400) {
+          if (initialized) await cleanup(initialized);
+          else {
+            await server.close();
+            await transport.close();
+            releaseSession();
+          }
+        }
+        return response;
+      } catch (error) {
+        if (initialized) await cleanup(initialized);
+        else if (!abandonedFactory) {
+          await server?.close();
+          await transport?.close();
+          releaseSession?.();
+        }
+        throw error;
+      } finally {
+        if (!abandonedFactory) releaseInit();
+      }
     };
 
     try {
@@ -403,9 +604,17 @@ function startHttpServerWithRetry(
                   `\n🚀 MCP Server running at: ${serverAddress}`,
                   'http',
                 );
+                // Default authorities follow the actual bound retry port.
+                const defaults = defaultAppHosts.get(app);
+                if (defaults)
+                  defaults.splice(
+                    0,
+                    defaults.length,
+                    ...loopbackAuthorities(info.port),
+                  );
+                resolve(serverInstance);
               },
             );
-            resolve(serverInstance);
           } catch (err: unknown) {
             logger.warning(
               `Binding attempt failed for port ${port}, retrying...`,
@@ -445,6 +654,18 @@ export async function startHttpTransport(
     config.mcpHttpMaxPortRetries,
     transportContext,
   );
+  // serve() uses HTTP/1 here; guard the adapter's broader HTTP/2 union type.
+  if (server instanceof http.Server) {
+    server.requestTimeout = config.httpSecurity.bodyTimeoutMs;
+    server.headersTimeout = Math.min(config.httpSecurity.bodyTimeoutMs, 60000);
+    server.setTimeout(config.httpSecurity.requestTimeoutMs, (socket) =>
+      socket.destroy(),
+    );
+  }
+  server.maxConnections =
+    config.httpSecurity.maxRequests + config.httpSecurity.maxStreams;
+  serverManagers.set(server, appManagers.get(app)!);
+  serverApps.set(server, app);
 
   logger.info('HTTP transport started successfully.', transportContext);
   return server;
@@ -462,8 +683,10 @@ export async function stopHttpTransport(
   logger.info('Attempting to stop http transport...', operationContext);
 
   // Stop session cleanup interval
-  const sessionManager = SessionManager.getInstance();
-  sessionManager.stopCleanupInterval();
+  const sessionManager = serverManagers.get(server);
+  sessionManager?.stopCleanupInterval();
+  const app = serverApps.get(server);
+  if (app) await closeHttpApp(app);
   logger.info('Session cleanup interval stopped', operationContext);
 
   return new Promise((resolve, reject) => {

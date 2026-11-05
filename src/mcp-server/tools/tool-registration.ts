@@ -11,6 +11,12 @@ import {
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { type DependencyContainer, injectable, injectAll } from 'tsyringe';
 import type { z } from 'zod';
+import { config } from '@/config/index.js';
+import { authContext } from '@/mcp-server/transports/auth/index.js';
+import { HttpAdmission } from '@/mcp-server/transports/http/httpAdmission.js';
+import { httpPrincipalKey } from '@/mcp-server/transports/http/httpPrincipal.js';
+import { assertInputBudget } from '@/mcp-server/transports/http/httpSecurity.js';
+import { boundToolInputSchema } from './utils/input-budget.js';
 
 import { ToolDefinitions } from '@/container/tokens.js';
 import { JsonRpcErrorCode } from '@/types-global/errors.js';
@@ -23,6 +29,9 @@ import {
   deriveToolTitle,
 } from '@/mcp-server/tools/utils/toolListing.js';
 
+// Shared across per-session servers; failed/cancelled work keeps its slot until it settles.
+const operationAdmission = new HttpAdmission(config.httpSecurity);
+
 @injectable()
 export class ToolRegistry {
   constructor(
@@ -31,7 +40,15 @@ export class ToolRegistry {
       z.ZodObject<z.ZodRawShape>,
       z.ZodObject<z.ZodRawShape>
     >[],
-  ) {}
+  ) {
+    this.toolDefs = this.toolDefs.map((tool) => ({
+      ...tool,
+      inputSchema: boundToolInputSchema(
+        tool.inputSchema,
+        config.toolInputLimits,
+      ),
+    }));
+  }
 
   /**
    * Registers all resolved tool definitions with the provided McpServer instance,
@@ -78,7 +95,18 @@ export class ToolRegistry {
         const handler = createMcpToolHandler({
           toolName: tool.name,
           inputSchema: tool.inputSchema,
-          logic: tool.logic,
+          logic: async (input, context, sdkContext) => {
+            assertInputBudget(input, config.toolInputLimits);
+            const release =
+              config.mcpTransportType === 'http' || authContext.getStore()
+                ? operationAdmission.acquire('requests', httpPrincipalKey())
+                : undefined;
+            try {
+              return await tool.logic(input, context, sdkContext);
+            } finally {
+              release?.();
+            }
+          },
           ...(tool.responseFormatter && {
             responseFormatter: tool.responseFormatter,
           }),
