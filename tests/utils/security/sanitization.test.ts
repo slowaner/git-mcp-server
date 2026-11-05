@@ -201,7 +201,7 @@ describe('Sanitization Utility', () => {
         user: 'casey',
         credentials: {
           password: 'my-secret-password',
-          session_token: 'abc-123-def-456',
+          session_token: 'fixture',
         },
         nonSensitive: 'data',
       };
