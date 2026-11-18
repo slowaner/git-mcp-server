@@ -279,14 +279,6 @@ const ConfigSchema = z.object({
   }),
   git: z
     .object({
-      executionProfile: z
-        .preprocess(
-          emptyStringAsUndefined,
-          z.enum(['restricted', 'trusted']).default('restricted'),
-        )
-        .describe(
-          'Explicit Git trust profile; restricted requires a verified OS sandbox and otherwise rejects execution.',
-        ),
       binaryPath: z
         .preprocess(
           emptyStringAsUndefined,
@@ -311,7 +303,7 @@ const ConfigSchema = z.object({
             ),
         )
         .describe(
-          'Operator-owned HOME for explicitly trusted native configuration and signing.',
+          'Operator-owned HOME for native Git configuration and signing.',
         ),
       trustedPath: z
         .preprocess(
@@ -548,7 +540,6 @@ const parseConfig = () => {
         undefined,
       wrapupInstructionsPath: env.GIT_WRAPUP_INSTRUCTIONS_PATH,
       baseDirs: env.GIT_BASE_DIR,
-      executionProfile: env.GIT_EXECUTION_PROFILE,
       binaryPath: env.GIT_BINARY_PATH,
       trustedHome: env.GIT_TRUSTED_HOME,
       trustedPath: env.GIT_TRUSTED_PATH,

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { it } from 'node:test';
 
-it('source-built Node config ignores cwd dotenv authority and preserves inherited operator opt-in', async () => {
+it('source-built Node config ignores cwd dotenv authority and preserves inherited operator settings', async () => {
   const directory = await mkdtemp(
     path.join(tmpdir(), 'git-startup-provenance-'),
   );
@@ -38,7 +38,7 @@ it('source-built Node config ignores cwd dotenv authority and preserves inherite
     assert.equal(build.status, 0, build.stderr);
     await writeFile(
       path.join(directory, '.env'),
-      'GIT_EXECUTION_PROFILE=trusted\nGIT_BINARY_PATH=/bin/echo\nGIT_BASE_DIR=/\nGIT_TRUSTED_HOME=/repository-controlled-home\n',
+      'GIT_BINARY_PATH=/bin/echo\nGIT_BASE_DIR=/\nGIT_TRUSTED_HOME=/repository-controlled-home\n',
     );
     const run = (extra: Record<string, string> = {}) => {
       const child = spawnSync('node', [bundle], {
@@ -57,7 +57,6 @@ it('source-built Node config ignores cwd dotenv authority and preserves inherite
       assert.equal(child.status, 0, child.stderr);
       const result = JSON.parse(child.stdout) as {
         runtime: string;
-        profile: string;
         binaryPath: string;
         trustedHome: string;
         roots?: string[];
@@ -66,17 +65,14 @@ it('source-built Node config ignores cwd dotenv authority and preserves inherite
       return result;
     };
     const absent = run();
-    assert.equal(absent.profile, 'restricted');
     assert.equal(absent.binaryPath, '/usr/bin/git');
     assert.equal(absent.trustedHome, directory);
     assert.equal(absent.roots, undefined);
     const explicit = run({
-      GIT_EXECUTION_PROFILE: 'trusted',
       GIT_BINARY_PATH: '/usr/bin/git',
       GIT_TRUSTED_HOME: directory,
       GIT_BASE_DIR: directory,
     });
-    assert.equal(explicit.profile, 'trusted');
     assert.equal(explicit.trustedHome, directory);
     assert.deepEqual(explicit.roots, [directory]);
   } finally {

@@ -56,7 +56,6 @@ describe('Command Builder', () => {
 
   describe('buildGitEnv', () => {
     const policy = {
-      profile: 'trusted' as const,
       binaryPath: '/usr/bin/git',
       homeDirectory: '/tmp/operator-home',
       helperPath: '/usr/bin:/bin',
@@ -89,7 +88,7 @@ describe('Command Builder', () => {
       ])
         expect(env[key]).toBeUndefined();
     });
-    it('retains explicit trusted agent/keyring authority', () => {
+    it('retains operator SSH agent and keyring settings', () => {
       const env = buildGitEnv(
         { SSH_AUTH_SOCK: '/operator/agent', GNUPGHOME: '/operator/keyring' },
         policy,

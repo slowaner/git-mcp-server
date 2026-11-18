@@ -1,18 +1,10 @@
 /**
- * @fileoverview Built-server STDIO Git execution-profile acceptance.
+ * @fileoverview Built-server STDIO tests for native Git.
  * @module tests/integration/git-runtime-stdio.test
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-  chmod,
-  mkdtemp,
-  mkdir,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -73,40 +65,18 @@ describe('source-built STDIO runtime policy', { timeout: 20000 }, () => {
     await client.connect(transport);
     return client;
   };
-  it('default restricted rejects before init destination creation and repository hooks/config', async () => {
-    const hook = path.join(directory, 'malicious-helper');
-    await writeFile(
-      hook,
-      '#!/bin/sh\nprintf executed > "' +
-        path.join(directory, 'executed') +
-        '"\n',
-    );
-    await chmod(hook, 0o700);
-    execFileSync('/usr/bin/git', ['config', 'core.fsmonitor', hook], {
-      cwd: directory,
-      env: { HOME: home, PATH: '/usr/bin:/bin' },
-    });
+  it('initializes a new repository inside an allowed root', async () => {
     const client = await connect();
-    const destination = path.join(directory, 'must-not-exist');
+    const destination = path.join(directory, 'new-repository');
     const result = await client.callTool({
       name: 'git_init',
       arguments: { path: destination },
     });
-    assert.equal(result.isError, true);
-    assert.match(
-      JSON.stringify(result.content),
-      /sandbox|restricted|unsupported/i,
-    );
-    await assert.rejects(stat(destination), { code: 'ENOENT' });
-    const status = await client.callTool({
-      name: 'git_status',
-      arguments: { path: directory },
-    });
-    assert.equal(status.isError, true);
-    await assert.rejects(readFile(path.join(directory, 'executed')));
+    assert.notEqual(result.isError, true, JSON.stringify(result.content));
+    assert.ok((await stat(path.join(destination, '.git'))).isDirectory());
   });
-  it('explicit trusted opt-in permits ordinary status with controlled Git', async () => {
-    const client = await connect({ GIT_EXECUTION_PROFILE: 'trusted' });
+  it('runs ordinary status with controlled Git', async () => {
+    const client = await connect();
     const result = await client.callTool({
       name: 'git_status',
       arguments: { path: directory },
@@ -117,22 +87,19 @@ describe('source-built STDIO runtime policy', { timeout: 20000 }, () => {
   it('canonical Node entrypoint ignores repository .env authority before filesystem operations', async () => {
     await writeFile(
       path.join(directory, '.env'),
-      'GIT_EXECUTION_PROFILE=trusted\nGIT_BINARY_PATH=/bin/echo\nGIT_BASE_DIR=/\n',
+      'GIT_BINARY_PATH=/bin/echo\nGIT_BASE_DIR=/\n',
     );
     const nodeExecutable = execFileSync('node', ['-p', 'process.execPath'], {
       encoding: 'utf8',
     }).trim();
-    const client = await connect({}, nodeExecutable);
+    const client = await connect({ GIT_BASE_DIR: home }, nodeExecutable);
     const destination = path.join(directory, 'dotenv-must-not-create');
     const result = await client.callTool({
       name: 'git_init',
       arguments: { path: destination },
     });
     assert.equal(result.isError, true);
-    assert.match(
-      JSON.stringify(result.content),
-      /sandbox|restricted|unsupported/i,
-    );
+    assert.match(JSON.stringify(result.content), /escape the defined root/);
     await assert.rejects(stat(destination), { code: 'ENOENT' });
   });
   it('built server rejects invalid blob output without formatting a success', async () => {
@@ -143,7 +110,7 @@ describe('source-built STDIO runtime policy', { timeout: 20000 }, () => {
       env: { HOME: home, PATH: '/usr/bin:/bin' },
       encoding: 'utf8',
     }).trim();
-    const client = await connect({ GIT_EXECUTION_PROFILE: 'trusted' });
+    const client = await connect();
     const result = await client.callTool({
       name: 'git_show',
       arguments: { path: directory, object: hash },

@@ -3,7 +3,6 @@
  * @module tests/mcp-server/tools/definitions/unit/git-stash.tool.test
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitStashTool } from '@/mcp-server/tools/definitions/git-stash.tool.js';
@@ -24,8 +23,6 @@ import {
 } from '../helpers/index.js';
 import type { GitStashResult } from '@/services/git/types.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
-
-installTrustedGitFixture();
 
 describe('git_stash tool', () => {
   const mockProvider = createMockGitProvider();

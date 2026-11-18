@@ -5,14 +5,7 @@
 import 'reflect-metadata';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-  chmod,
-  mkdtemp,
-  mkdir,
-  readFile,
-  rm,
-  writeFile,
-} from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -61,7 +54,6 @@ describe('production native Git execution', { timeout: 20000 }, () => {
       '[user]\n name = Runtime Fixture\n email = runtime@example.invalid\n[commit]\n gpgsign = false\n',
     );
     Object.assign(config.git, {
-      executionProfile: 'trusted',
       binaryPath: '/usr/bin/git',
       trustedHome: home,
       trustedPath: '/usr/bin:/bin',
@@ -73,7 +65,6 @@ describe('production native Git execution', { timeout: 20000 }, () => {
     });
     env = buildTrustedGitEnvironment(
       {
-        profile: 'trusted',
         binaryPath: '/usr/bin/git',
         homeDirectory: home,
         helperPath: '/usr/bin:/bin',
@@ -87,28 +78,7 @@ describe('production native Git execution', { timeout: 20000 }, () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  it('defaults to restricted and rejects provider init before destination mkdir', async () => {
-    config.git.executionProfile = 'restricted';
-    const destination = path.join(directory, 'must-not-exist');
-    await assert.rejects(
-      new CliGitProvider().init(
-        { path: destination },
-        { ...context(), workingDirectory: destination },
-      ),
-      reason('POLICY_UNSUPPORTED'),
-    );
-    await assert.rejects(readFile(path.join(destination, '.git', 'config')));
-    await assert.rejects(
-      import('node:fs/promises').then(({ stat }) => stat(destination)),
-      { code: 'ENOENT' },
-    );
-    await assert.rejects(
-      executeGitCommand(['status'], '/missing'),
-      reason('POLICY_UNSUPPORTED'),
-    );
-  });
-
-  it('runs ordinary provider operations only after explicit trusted opt-in', async () => {
+  it('runs ordinary provider operations with native Git', async () => {
     const provider = new CliGitProvider();
     const status = await provider.status({}, context());
     assert.equal(status.isClean, false); // private fixture HOME is an untracked directory
@@ -145,7 +115,7 @@ describe('production native Git execution', { timeout: 20000 }, () => {
     );
   });
 
-  it('retains explicit trusted native SSH signing and same-HOME effective config', async () => {
+  it('retains native SSH signing and same-HOME effective config', async () => {
     const key = path.join(home, 'signing-key');
     execFileSync(
       '/usr/bin/ssh-keygen',

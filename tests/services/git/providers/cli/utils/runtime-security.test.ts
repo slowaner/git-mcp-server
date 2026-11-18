@@ -26,7 +26,6 @@ import {
 } from '../../../../../../src/services/git/providers/cli/utils/process-supervision.js';
 
 const trusted: GitExecutionPolicy = {
-  profile: 'trusted',
   binaryPath: '/usr/bin/git',
   homeDirectory: '/tmp',
   helperPath: '/usr/bin:/bin',
@@ -38,13 +37,7 @@ const reason = (expected: string) => (error: unknown) => {
 };
 
 describe('Git execution policy', () => {
-  it('rejects restricted profile on every platform before any child program', () => {
-    assert.throws(
-      () => assertGitExecutionPolicy({ ...trusted, profile: 'restricted' }),
-      reason('POLICY_UNSUPPORTED'),
-    );
-  });
-  it('cannot promote an untrusted canonical repository by selecting trusted mode', () => {
+  it('rejects a canonical repository classified as untrusted', () => {
     assert.throws(
       () =>
         assertGitExecutionPolicy(trusted, {

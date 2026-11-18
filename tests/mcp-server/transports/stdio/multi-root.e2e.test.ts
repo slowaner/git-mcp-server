@@ -56,7 +56,6 @@ describe('stdio multi-root paths', () => {
       ...(process.env as Record<string, string>),
       NODE_ENV: 'test',
       HOME: root,
-      GIT_EXECUTION_PROFILE: 'trusted',
       GIT_BINARY_PATH: '/usr/bin/git',
       GIT_TRUSTED_HOME: root,
       GIT_TRUSTED_PATH: '/usr/bin:/bin',
