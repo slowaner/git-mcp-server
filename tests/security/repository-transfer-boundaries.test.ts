@@ -118,7 +118,6 @@ describe('implicit native transfer boundaries', () => {
     outside = join(temporary, 'outside');
     mkdirSync(allowed, { mode: 0o700 });
     mkdirSync(outside, { mode: 0o700 });
-    config.git.executionProfile = 'trusted';
     config.git.baseDirs = [allowed];
     config.git.trustedHome = temporary;
   });

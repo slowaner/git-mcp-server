@@ -1,47 +1,38 @@
 /**
- * @fileoverview Explicit Git trust boundary, with no unsupported sandbox fallback.
+ * @fileoverview Validate native Git execution and build its operator environment.
  * @module services/git/providers/cli/utils/execution-policy
  */
 import { delimiter, isAbsolute } from 'node:path';
 
 import { GitExecutionError } from './execution-errors.js';
 
-/** Restricted is the default. Trusted grants native Git the operator's authority. */
-export type GitExecutionProfile = 'restricted' | 'trusted';
-
 /** G1 supplies this after canonical repository authorization, never tool input. */
 export interface GitRepositoryExecutionBoundary {
   canonicalWorkingDirectory: string;
   canonicalRoots: readonly string[];
-  /** Attacker-writable repositories require OS containment, even in trusted mode. */
+  /** Attacker-writable repositories require OS containment. */
   repositoryTrust: 'operator-trusted' | 'untrusted';
 }
 
 /** Operator-owned process policy; repository configuration cannot change it. */
 export interface GitExecutionPolicy {
-  profile: GitExecutionProfile;
   binaryPath: string;
   homeDirectory: string;
   helperPath: string;
 }
 
 /**
- * Reject before discovery or execution unless an explicitly trusted profile applies.
- * No OS sandbox backend is shipped: restricted operations are unavailable on every
- * platform. Realpath, Git config overrides and process groups do not provide the
- * filesystem/egress/process containment required for an attacker-writable repo.
+ * Check that native execution is supported before discovery or spawn.
+ * Reject repositories explicitly classified as untrusted by the caller.
  */
 export function assertGitExecutionPolicy(
   policy: GitExecutionPolicy,
   boundary?: GitRepositoryExecutionBoundary,
 ): void {
-  if (
-    policy.profile !== 'trusted' ||
-    boundary?.repositoryTrust === 'untrusted'
-  ) {
+  if (boundary?.repositoryTrust === 'untrusted') {
     throw new GitExecutionError(
       'POLICY_UNSUPPORTED',
-      'Restricted Git execution unavailable: no verified filesystem, process and egress sandbox. Explicit trusted profile requires operator-trusted repositories.',
+      'Native Git execution requires an operator-trusted repository.',
     );
   }
   if (process.platform !== 'linux' && process.platform !== 'darwin') {

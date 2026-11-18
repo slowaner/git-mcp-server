@@ -30,7 +30,7 @@ import {
 import { parseRepositoryGrants } from '../auth/lib/authConfiguration.js';
 import type { VerifiedPrincipal } from '../auth/lib/verifiedPrincipal.js';
 import { getConfiguredRepositoryPolicy } from '@/services/git/core/configured-repository-policy.js';
-import { HttpAdmission } from './httpAdmission.js';
+import { HttpAdmission, type AdmissionRelease } from './httpAdmission.js';
 import {
   checkContentLength,
   HttpLimitError,
@@ -61,32 +61,24 @@ import {
 
 /** Factory function that creates a fully-configured McpServer instance. */
 export type McpServerFactory = () => Promise<McpServer>;
-const appManagers = new WeakMap<
-  Hono<{ Bindings: HonoNodeBindings }>,
-  SessionManager
->();
+type HttpAppEnv = {
+  Bindings: HonoNodeBindings;
+  Variables: { releaseStream: AdmissionRelease | undefined };
+};
+type HttpApp = Hono<HttpAppEnv>;
+
+const appManagers = new WeakMap<HttpApp, SessionManager>();
 const serverManagers = new WeakMap<ServerType, SessionManager>();
-const appDisposers = new WeakMap<
-  Hono<{ Bindings: HonoNodeBindings }>,
-  () => Promise<void>
->();
-const serverApps = new WeakMap<
-  ServerType,
-  Hono<{ Bindings: HonoNodeBindings }>
->();
-const defaultAppHosts = new WeakMap<
-  Hono<{ Bindings: HonoNodeBindings }>,
-  string[]
->();
+const appDisposers = new WeakMap<HttpApp, () => Promise<void>>();
+const serverApps = new WeakMap<ServerType, HttpApp>();
+const defaultAppHosts = new WeakMap<HttpApp, string[]>();
 const loopbackAuthorities = (port: number) =>
   ['localhost', '127.0.0.1', '[::1]'].map(
     (host) => new URL(`http://${host}:${port}`).host,
   );
 
 /** Close every per-app session and timer; used by shutdown and embedded hosts. */
-export async function closeHttpApp(
-  app: Hono<{ Bindings: HonoNodeBindings }>,
-): Promise<void> {
+export async function closeHttpApp(app: HttpApp): Promise<void> {
   await appDisposers.get(app)?.();
 }
 
@@ -94,7 +86,7 @@ export async function closeHttpApp(
 export function createHttpApp(
   createMcpServer: McpServerFactory,
   parentContext: RequestContext,
-): Hono<{ Bindings: HonoNodeBindings }> {
+): HttpApp {
   const authStrategy = createAuthStrategy();
   const grants = authStrategy
     ? parseRepositoryGrants(config.mcpRepositoryGrants)
@@ -102,7 +94,7 @@ export function createHttpApp(
   grants?.validateRoots((roots) => {
     getConfiguredRepositoryPolicy().restrict(roots);
   });
-  const app = new Hono<{ Bindings: HonoNodeBindings }>();
+  const app = new Hono<HttpAppEnv>();
   const transportContext = {
     ...parentContext,
     component: 'HttpTransportSetup',
@@ -305,17 +297,22 @@ export function createHttpApp(
   // No queue: admission fails immediately. Leases persist through response streams.
   app.use(config.mcpHttpEndpointPath, async (c, next) => {
     if (closing) throw new HttpLimitError(503, 'HTTP app is closing.');
-    const release = admission.acquire('requests', principal());
+    const releaseRequest = admission.acquire('requests', principal());
     try {
       await next();
+      const releaseStream = c.get('releaseStream');
       c.res = boundResponseLifetime(
         c.res,
-        release,
-        policy.requestTimeoutMs,
+        () => {
+          releaseStream?.();
+          releaseRequest();
+        },
+        releaseStream ? policy.streamTimeoutMs : policy.requestTimeoutMs,
         c.req.raw.signal,
       );
     } catch (error) {
-      release();
+      c.get('releaseStream')?.();
+      releaseRequest();
       throw error;
     }
   });
@@ -386,12 +383,13 @@ export function createHttpApp(
     const release = admission.acquire('streams', principal());
     try {
       const response = await transportOrError.handleRequest(c.req.raw);
-      return boundResponseLifetime(
-        response,
-        release,
-        policy.streamTimeoutMs,
-        c.req.raw.signal,
-      );
+      const mediaType = response.headers.get('content-type')?.split(';', 1)[0];
+      if (mediaType === 'text/event-stream') {
+        c.set('releaseStream', release);
+      } else {
+        release();
+      }
+      return response;
     } catch (error) {
       release();
       throw error;
@@ -608,7 +606,7 @@ async function isPortInUse(
 }
 
 function startHttpServerWithRetry(
-  app: Hono<{ Bindings: HonoNodeBindings }>,
+  app: HttpApp,
   initialPort: number,
   host: string,
   maxRetries: number,
@@ -716,9 +714,11 @@ export async function startHttpTransport(
   if (server instanceof http.Server) {
     server.requestTimeout = config.httpSecurity.bodyTimeoutMs;
     server.headersTimeout = Math.min(config.httpSecurity.bodyTimeoutMs, 60000);
-    server.setTimeout(config.httpSecurity.requestTimeoutMs, (socket) =>
-      socket.destroy(),
+    const idleTimeoutMs = Math.max(
+      config.httpSecurity.requestTimeoutMs,
+      config.httpSecurity.streamTimeoutMs,
     );
+    server.setTimeout(idleTimeoutMs, (socket) => socket.destroy());
   }
   server.maxConnections =
     config.httpSecurity.maxRequests + config.httpSecurity.maxStreams;

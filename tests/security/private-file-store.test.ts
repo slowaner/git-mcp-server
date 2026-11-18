@@ -10,6 +10,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -49,6 +50,18 @@ describe('private atomic file storage', () => {
     expect(store.delete(tenant, key)).toBe(true);
     expect(store.delete(tenant, key)).toBe(false);
     expect(store.read(tenant, key)).toBeNull();
+  });
+
+  it('removes the temporary inode when a replacement fails validation', () => {
+    store.write(tenant, key, 'original');
+    const mask = process.umask(0o200);
+    try {
+      expect(() => store.write(tenant, key, 'replacement')).toThrow();
+    } finally {
+      process.umask(mask);
+    }
+    expect(readdirSync(path.join(root, tenant))).toEqual([key]);
+    expect(store.read(tenant, key)).toBe('original');
   });
 
   it('never follows value links for read/write/delete/list', () => {

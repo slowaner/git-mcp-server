@@ -2,21 +2,39 @@
  * @fileoverview Unit tests for executeGitCommand cwd validation
  * @module tests/services/git/providers/cli/utils/git-executor.test
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { config } from '@/config/index.js';
+import { describe, expect, it } from 'vitest';
 
 import { executeGitCommand } from '@/services/git/providers/cli/utils/git-executor.js';
 import { McpError } from '@/types-global/errors.js';
 
+it('enforces GIT_MAX_COMMAND_TIMEOUT_MS when running Git', () => {
+  // Start a fresh executor so configuration is loaded from its own environment.
+  const result = Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `import { executeGitCommand } from '@/services/git/providers/cli/utils/git-executor.js';
+      try {
+        await executeGitCommand(['1'], process.cwd());
+      } catch (error) {
+        console.error(error.data?.reason);
+        process.exitCode = 1;
+      }`,
+    ],
+    {
+      env: {
+        ...process.env,
+        GIT_BINARY_PATH: '/bin/sleep',
+        GIT_MAX_COMMAND_TIMEOUT_MS: '50',
+      },
+    },
+  );
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr.toString().trim()).toBe('DEADLINE');
+});
+
 describe('executeGitCommand cwd pre-flight', () => {
-  let savedProfile: typeof config.git.executionProfile;
-  beforeEach(() => {
-    savedProfile = config.git.executionProfile;
-    config.git.executionProfile = 'trusted';
-  });
-  afterEach(() => {
-    config.git.executionProfile = savedProfile;
-  });
   it('throws a clear error when cwd does not exist (not generic "Git not found")', async () => {
     await expect(
       executeGitCommand(['status'], '/definitely/not/a/real/path/xyz123'),

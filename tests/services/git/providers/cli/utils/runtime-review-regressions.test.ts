@@ -64,7 +64,6 @@ describe('native runtime review regressions', { timeout: 90000 }, () => {
       '[user]\n name = Runtime Review\n email = runtime-review@example.invalid\n[commit]\n gpgsign = false\n',
     );
     Object.assign(config.git, {
-      executionProfile: 'trusted',
       binaryPath: '/usr/bin/git',
       trustedHome: home,
       trustedPath: '/usr/bin:/bin',
@@ -76,7 +75,6 @@ describe('native runtime review regressions', { timeout: 90000 }, () => {
     });
     const env = buildTrustedGitEnvironment(
       {
-        profile: 'trusted',
         binaryPath: '/usr/bin/git',
         homeDirectory: home,
         helperPath: '/usr/bin:/bin',
@@ -380,15 +378,8 @@ describe('native runtime review regressions', { timeout: 90000 }, () => {
     );
   });
 
-  it('keeps standalone trusted validation and restricted pre-spawn rejection', async () => {
+  it('validates a repository outside an SDK request', async () => {
     const provider = new CliGitProvider();
     await provider.validateRepository(repository, context());
-    await installGit('printf \'run\\n\' >> ../calls\nexec /usr/bin/git "$@"');
-    config.git.executionProfile = 'restricted';
-    await assert.rejects(
-      provider.validateRepository(repository, context()),
-      reason('POLICY_UNSUPPORTED'),
-    );
-    assert.equal(existsSync(calls()), false);
   });
 });

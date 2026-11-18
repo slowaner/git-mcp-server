@@ -8,6 +8,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -56,7 +57,6 @@ describe('stdio multi-root paths', () => {
       ...(process.env as Record<string, string>),
       NODE_ENV: 'test',
       HOME: root,
-      GIT_EXECUTION_PROFILE: 'trusted',
       GIT_BINARY_PATH: '/usr/bin/git',
       GIT_TRUSTED_HOME: root,
       GIT_TRUSTED_PATH: '/usr/bin:/bin',
@@ -65,8 +65,8 @@ describe('stdio multi-root paths', () => {
       MCP_TRANSPORT_TYPE: 'stdio',
       STORAGE_PROVIDER_TYPE: 'in-memory',
       MCP_LOG_LEVEL: 'error',
-      OTEL_ENABLED: 'false',
     };
+    delete env.OTEL_ENABLED;
     git(['init', '-q', '-b', 'main'], repo);
     writeFileSync(join(repo, 'base.txt'), 'fixture\n');
     git(['add', 'base.txt'], repo);
@@ -249,6 +249,9 @@ describe('stdio multi-root paths', () => {
     } finally {
       await writer.close();
     }
+    expect(readdirSync(join(storedEnv.STORAGE_FILESYSTEM_PATH, 'v2'))).toEqual(
+      [],
+    );
     try {
       await reader.connect(transport({ ...storedEnv, GIT_BASE_DIR: first }));
       const status = await reader.callTool({

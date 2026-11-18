@@ -21,8 +21,8 @@ This document defines the operational rules for contributing to this codebase. F
      - `createToolHandler` wraps git-specific logic: resolves DI dependencies and working directory before calling your pure logic.
      - Resource handlers (`resourceHandlerFactory`) validate params, invoke logic, apply `responseFormatter`, and catch errors.
 
-2. **Full-Stack Observability**
-   - OpenTelemetry is preconfigured. Logs and errors are automatically correlated to traces.
+2. **Local Observability**
+   - The standalone server writes structured logs locally. OpenTelemetry API utilities support instrumentation in embedded runtimes.
    - `measureToolExecution` automatically records duration, success, payload sizes, and error codes for every tool call.
    - Do not add custom spans in tool/resource logic. The framework handles instrumentation.
 
@@ -56,7 +56,7 @@ This document defines the operational rules for contributing to this codebase. F
 | `src/mcp-server/prompts/definitions/`   | MCP Prompt definitions (e.g., `git-wrapup.prompt.ts`).                                                                                   |
 | `src/mcp-server/transports/`            | Transport implementations: `http/` (Hono + Streamable HTTP), `stdio/`, `auth/` (JWT/OAuth strategies).                                   |
 | `src/services/git/`                     | Git service: `core/` (interfaces, factory), `providers/cli/` (CLI implementation with domain-organized operations).                      |
-| `src/storage/`                          | Storage abstractions and providers (in-memory, filesystem, supabase, cloudflare).                                                        |
+| `src/storage/`                          | Storage abstractions and providers (in-memory, filesystem, supabase).                                                                    |
 | `src/container/`                        | Dependency injection (`tsyringe`). Service registration and tokens.                                                                      |
 | `src/utils/`                            | Global utilities: `internal/` (logger, requestContext, ErrorHandler, performance), `security/` (sanitization), `telemetry/`, `metrics/`. |
 | `tests/`                                | Unit/integration tests mirroring `src/` structure.                                                                                       |
@@ -432,7 +432,7 @@ Resources follow the same pattern as tools with a declarative `ResourceDefinitio
 | :----------- | :-------------------------------------------------------------------------------------- |
 | `internal/`  | `logger`, `requestContextService`, `ErrorHandler`, `performance` (measureToolExecution) |
 | `security/`  | `sanitization` (path/input validation), `rateLimiter`, `idGenerator`                    |
-| `telemetry/` | OpenTelemetry instrumentation                                                           |
+| `telemetry/` | Trace context and semantic conventions                                                  |
 
 ---
 
@@ -448,7 +448,7 @@ Resources follow the same pattern as tools with a declarative `ResourceDefinitio
 
 ### STDIO Transport
 
-No HTTP-based auth. Authorization handled by the host application.
+The host application authorizes STDIO. Each connection keeps its working directory in memory, independent of the configured persistent storage provider.
 
 ### HTTP Endpoints
 
@@ -474,11 +474,6 @@ No HTTP-based auth. Authorization handled by the host application.
 - Resolves `CreateMcpServerInstance` to get a configured `McpServer`.
 - Based on `MCP_TRANSPORT_TYPE`, starts the appropriate transport (`http` or `stdio`).
 - Handles graceful startup and shutdown.
-
-### Worker (Edge) — Experimental
-
-- `worker.ts` adapts the server for Cloudflare Workers.
-- Git CLI operations require local filesystem access — edge deployment is experimental.
 
 ---
 
@@ -506,9 +501,9 @@ All configuration validated via Zod in `src/config/index.ts`. Derives `serviceNa
 | :------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Transport** | `MCP_TRANSPORT_TYPE` (`stdio`/`http`), `MCP_HTTP_PORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PATH`                                                                                                                                                                   |
 | **Auth**      | `MCP_AUTH_MODE` (`none`/`jwt`/`oauth`), `MCP_AUTH_SECRET_KEY`, `OAUTH_ISSUER_URL`, `OAUTH_AUDIENCE`, `OAUTH_JWKS_URI`                                                                                                                                      |
-| **Storage**   | `STORAGE_PROVIDER_TYPE` (`in-memory`/`filesystem`/`supabase`/`cloudflare-r2`/`cloudflare-kv`), `STORAGE_FILESYSTEM_PATH`                                                                                                                                   |
+| **Storage**   | `STORAGE_PROVIDER_TYPE` (`in-memory`/`filesystem`/`supabase`), `STORAGE_FILESYSTEM_PATH`                                                                                                                                                                   |
 | **Git**       | `GIT_PROVIDER` (`auto`/`cli`/`isomorphic`), `GIT_SIGN_COMMITS`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`, `GIT_BASE_DIR`, `GIT_MAX_COMMAND_TIMEOUT_MS`, `GIT_MAX_BUFFER_SIZE_MB`, `GIT_WRAPUP_INSTRUCTIONS_PATH` |
-| **Telemetry** | `OTEL_ENABLED`, `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`                                                                                                                   |
+| **Telemetry** | `OTEL_ENABLED`, `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`                                                                                                                                                                                                |
 
 ---
 
@@ -521,7 +516,6 @@ All configuration validated via Zod in `src/config/index.ts`. Derives `serviceNa
 | `bun test`                           | Run unit/integration tests.                                                            |
 | `bun run dev:stdio` / `dev:http`     | Development mode.                                                                      |
 | `bun run start:stdio` / `start:http` | Production mode (after build).                                                         |
-| `bun run build:worker`               | Build Cloudflare Worker bundle.                                                        |
 
 ---
 

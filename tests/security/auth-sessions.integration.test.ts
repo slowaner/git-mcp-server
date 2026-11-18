@@ -225,7 +225,6 @@ suite('authenticated actual HTTP session and repository isolation', () => {
       },
       git: {
         ...config.git,
-        executionProfile: 'trusted',
         baseDirs: [first, second],
       },
     });
@@ -460,7 +459,7 @@ suite('authenticated actual HTTP session and repository isolation', () => {
           maxSessions: 1,
           maxSessionsPerPrincipal: 1,
         };
-        config.mcpStatefulSessionStaleTimeoutMs = 100;
+        config.mcpStatefulSessionStaleTimeoutMs = 60_000;
         app = isolated = createHttpApp(async () => {
           const server = await makeServer();
           const originalClose = server.close.bind(server);
@@ -485,6 +484,17 @@ suite('authenticated actual HTTP session and repository isolation', () => {
           const full = await request(auth, undefined, 'POST', init);
           expect(full.status).toBe(429);
           await full.text();
+        }
+        // Expire the original session without making the replacement race a
+        // short wall-clock timeout.
+        const expiry = Date.now() + config.mcpStatefulSessionStaleTimeoutMs + 1;
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(expiry);
+        try {
+          const expired = await request(alice, sid, 'GET');
+          expect(expired.status).toBe(404);
+          await expired.text();
+        } finally {
+          clock.mockRestore();
         }
         await Promise.race([
           cleanupObserved,

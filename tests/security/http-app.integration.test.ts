@@ -133,7 +133,6 @@ describeHttp('actual production HTTP parser and admission', () => {
     ]);
     config.git = {
       ...config.git,
-      executionProfile: 'trusted',
       baseDirs: [process.cwd()],
     };
     container.registerInstance(AppConfig, config);
@@ -370,6 +369,25 @@ describeHttp('actual production HTTP parser and admission', () => {
     expect(resumed.status).toBe(200);
     await second.body!.cancel();
     await resumed.body!.cancel();
+  });
+
+  test('standalone SSE stays open past the ordinary request deadline', async () => {
+    const value = app();
+    const sid = await initialize(value);
+    config.httpSecurity.requestTimeoutMs = 25;
+    config.httpSecurity.streamTimeoutMs = 2000;
+
+    const response = await value.request('http://localhost:3015/mcp', {
+      headers: {
+        ...baseHeaders,
+        'mcp-session-id': sid,
+        accept: 'text/event-stream',
+      },
+    });
+    expect(response.status).toBe(200);
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await expect(response.body!.cancel()).resolves.toBeUndefined();
   });
 
   test('expired session closes allocations before replacement', async () => {

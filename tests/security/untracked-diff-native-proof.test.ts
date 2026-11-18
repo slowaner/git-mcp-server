@@ -66,7 +66,6 @@ describe('installed Git combined untracked qualification', () => {
     mkdirSync(repository, { mode: 0o700 });
     env = buildTrustedGitEnvironment(
       {
-        profile: 'trusted',
         binaryPath: '/usr/bin/git',
         homeDirectory: home,
         helperPath: '/usr/bin:/bin',

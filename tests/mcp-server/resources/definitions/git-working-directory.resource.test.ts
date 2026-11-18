@@ -9,8 +9,6 @@ import {
 } from '@/mcp-server/transports/auth/lib/requestIdentity.js';
 import { sessionWorkingDirectoryKey } from '@/mcp-server/transports/auth/lib/verifiedPrincipal.js';
 import { container } from 'tsyringe';
-import { installTrustedGitFixture } from '../../tools/definitions/helpers/testContext.js';
-installTrustedGitFixture();
 
 import { gitWorkingDirectoryResource } from '@/mcp-server/resources/definitions/git-working-directory.resource.js';
 import { StorageService as StorageServiceToken } from '@/container/tokens.js';

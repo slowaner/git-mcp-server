@@ -4,6 +4,8 @@
  */
 import path from 'node:path';
 
+import { authContext } from '@/mcp-server/transports/auth/lib/authContext.js';
+
 import {
   principalFromVerifiedClaims,
   sessionWorkingDirectoryKey,
@@ -22,8 +24,9 @@ export function workingDirectoryStore(
   storage: Pick<StorageService, 'get' | 'set' | 'delete'>,
   context: RequestContext,
 ): SessionWorkingDirectoryStore {
+  const session = authContext.getStore();
   return new SessionWorkingDirectoryStore(
-    storage,
+    session?.stdioWorkingDirectoryStorage ?? storage,
     currentPrincipal(),
     currentServerSessionId(),
     context,
