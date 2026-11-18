@@ -115,15 +115,18 @@ export class SupabaseProvider implements IStorageProvider {
     tenantId: string,
     key: string,
     context: RequestContext,
+    signal?: AbortSignal,
   ): Promise<boolean> {
     return ErrorHandler.tryCatch(
       async () => {
-        const { error, count } = await this.getClient()
+        const query = this.getClient()
           .from(TABLE_NAME)
           .delete({ count: 'exact' })
           .eq('tenant_id', tenantId)
           .eq('key', key);
+        if (signal) query.abortSignal(signal);
 
+        const { error, count } = await query;
         if (error) throw error;
         return (count ?? 0) > 0;
       },

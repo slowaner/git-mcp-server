@@ -22,7 +22,10 @@ import { randomUUID } from 'node:crypto';
 import { container } from 'tsyringe';
 import { StorageService as StorageServiceToken } from '@/container/tokens.js';
 import type { StorageService } from '@/storage/core/StorageService.js';
-import { SessionWorkingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
+import {
+  SessionWorkingDirectoryStore,
+  SessionWorkingDirectoryWrites,
+} from '@/storage/core/sessionWorkingDirectoryStore.js';
 import {
   currentPrincipal,
   hostPrincipal,
@@ -105,7 +108,10 @@ export function createHttpApp(
   const transports = new Map<string, StreamableHTTPTransport>();
   const servers = new Map<string, McpServer>();
   const sessionReleases = new Map<string, () => void>();
-  const sessionOwners = new Map<string, VerifiedPrincipal>();
+  const sessions = new Map<
+    string,
+    { owner: VerifiedPrincipal; cwdWrites: SessionWorkingDirectoryWrites }
+  >();
   const admission = new HttpAdmission(config.httpSecurity);
   const policy = config.httpSecurity;
   const hosts = policy.allowedHosts.length
@@ -121,17 +127,24 @@ export function createHttpApp(
     const pending = (async () => {
       const transport = transports.get(sid);
       const server = servers.get(sid);
-      const owner = sessionOwners.get(sid);
-      sessionOwners.delete(sid);
+      const session = sessions.get(sid);
+      const drained = session?.cwdWrites.close();
+      sessions.delete(sid);
       transports.delete(sid);
       servers.delete(sid);
       sessionManager.terminateSession(sid);
-      // Release only after close completes; failed close must not open new capacity.
       try {
         await server?.close();
         await transport?.close();
-        sessionReleases.get(sid)?.();
-        sessionReleases.delete(sid);
+      } catch {
+        // Failed closes continue to count against session capacity.
+        logger.warning('HTTP session close failed', transportContext);
+        return;
+      }
+
+      try {
+        await drained;
+        const owner = session?.owner;
         if (owner && container.isRegistered(StorageServiceToken)) {
           const storage =
             container.resolve<StorageService>(StorageServiceToken);
@@ -143,11 +156,18 @@ export function createHttpApp(
                 owner,
                 sid,
                 transportContext,
-              ).clear(),
+              ).clear(AbortSignal.timeout(policy.requestTimeoutMs)),
           );
         }
       } catch {
-        logger.warning('HTTP session cleanup failed', transportContext);
+        logger.warning(
+          'HTTP working-directory cleanup failed',
+          transportContext,
+        );
+      } finally {
+        // Retain the lease during cleanup to bound outstanding storage deletes.
+        sessionReleases.get(sid)?.();
+        sessionReleases.delete(sid);
       }
     })();
     cleanupTasks.set(sid, pending);
@@ -274,7 +294,8 @@ export function createHttpApp(
   app.use(config.mcpHttpEndpointPath, async (c, next) => {
     const sid = c.req.header('mcp-session-id');
     if (sid) {
-      if (!sessionManager.isSessionOwner(sid, currentPrincipal()))
+      const session = sessions.get(sid);
+      if (!session || !sessionManager.isSessionOwner(sid, currentPrincipal()))
         return c.json(
           {
             jsonrpc: '2.0',
@@ -287,7 +308,11 @@ export function createHttpApp(
           404,
         );
       return authContext.run(
-        { ...authContext.getStore(), sessionId: sid },
+        {
+          ...authContext.getStore(),
+          sessionId: sid,
+          cwdWrites: session.cwdWrites,
+        },
         next,
       );
     }
@@ -506,6 +531,7 @@ export function createHttpApp(
         const activeServer = server;
         const newSessionId = randomUUID();
         const owner = currentPrincipal();
+        const cwdWrites = new SessionWorkingDirectoryWrites();
         transport = new StreamableHTTPTransport({
           enableJsonResponse: true,
           maxRequestBodySize: policy.maxBodyBytes,
@@ -515,7 +541,7 @@ export function createHttpApp(
             transports.set(sid, transport!);
             servers.set(sid, activeServer);
             sessionReleases.set(sid, releaseSession!);
-            sessionOwners.set(sid, owner);
+            sessions.set(sid, { owner, cwdWrites });
             sessionManager.createSession(
               sid,
               owner.clientId,
@@ -538,7 +564,7 @@ export function createHttpApp(
 
         const activeTransport = transport;
         const response = await authContext.run(
-          { ...authContext.getStore(), sessionId: newSessionId },
+          { ...authContext.getStore(), sessionId: newSessionId, cwdWrites },
           async () => {
             await activeServer.connect(activeTransport);
             return dispatchWithDeadline(

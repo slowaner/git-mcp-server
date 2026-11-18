@@ -69,10 +69,15 @@ export class StorageService {
     return this.provider.set(tenantId, key, value, context, options);
   }
 
-  delete(key: string, context: RequestContext): Promise<boolean> {
+  delete(
+    key: string,
+    context: RequestContext,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     const tenantId = getTenantId(context);
     encodeStorageKey(tenantId, key);
-    return this.provider.delete(tenantId, key, context);
+    signal?.throwIfAborted();
+    return this.provider.delete(tenantId, key, context, signal);
   }
 
   list(

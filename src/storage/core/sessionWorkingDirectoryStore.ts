@@ -19,6 +19,33 @@ import {
   currentServerSessionId,
 } from '@/mcp-server/transports/auth/lib/requestIdentity.js';
 
+/** Tracks the writes accepted by one HTTP session until it closes. */
+export class SessionWorkingDirectoryWrites {
+  private readonly pending = new Set<Promise<void>>();
+  private closing = false;
+
+  async run(write: () => Promise<void>): Promise<void> {
+    if (this.closing) {
+      throw new McpError(
+        JsonRpcErrorCode.InvalidRequest,
+        'The HTTP session is closing.',
+      );
+    }
+    const pending = Promise.resolve().then(write);
+    this.pending.add(pending);
+    try {
+      await pending;
+    } finally {
+      this.pending.delete(pending);
+    }
+  }
+
+  async close(): Promise<void> {
+    this.closing = true;
+    await Promise.allSettled(this.pending);
+  }
+}
+
 /** Construct state from current verified server authority, ignoring caller identity fields. */
 export function workingDirectoryStore(
   storage: Pick<StorageService, 'get' | 'set' | 'delete'>,
@@ -30,6 +57,7 @@ export function workingDirectoryStore(
     currentPrincipal(),
     currentServerSessionId(),
     context,
+    session?.cwdWrites,
   );
 }
 
@@ -47,6 +75,7 @@ export class SessionWorkingDirectoryStore {
     principal: VerifiedPrincipal,
     serverSessionId: string,
     context: RequestContext,
+    private readonly writes?: SessionWorkingDirectoryWrites,
   ) {
     // Defensive validation prevents malformed internal identity from reaching
     // StorageService's legacy default-tenant behavior during migration.
@@ -90,11 +119,12 @@ export class SessionWorkingDirectoryStore {
         'Working directory must be an authorized absolute path.',
       );
     }
-    return this.storage.set(this.key, authorizedPath, this.context);
+    const write = () => this.storage.set(this.key, authorizedPath, this.context);
+    return this.writes ? this.writes.run(write) : write();
   }
 
   /** Clear only this owner/session state on explicit clear or session cleanup. */
-  clear(): Promise<boolean> {
-    return this.storage.delete(this.key, this.context);
+  clear(signal?: AbortSignal): Promise<boolean> {
+    return this.storage.delete(this.key, this.context, signal);
   }
 }

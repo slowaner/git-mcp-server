@@ -5,6 +5,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { createClient } from '@supabase/supabase-js';
 import { SignJWT } from 'jose';
 import { container } from 'tsyringe';
 import {
@@ -40,6 +41,8 @@ import { z } from 'zod';
 import { CliGitProvider } from '@/services/git/providers/cli/CliGitProvider.js';
 import { StorageService } from '@/storage/core/StorageService.js';
 import { InMemoryProvider } from '@/storage/providers/inMemory/inMemoryProvider.js';
+import { SupabaseProvider } from '@/storage/providers/supabase/supabaseProvider.js';
+import type { Database } from '@/storage/providers/supabase/supabase.types.js';
 import {
   currentPrincipal,
   currentServerSessionId,
@@ -102,6 +105,7 @@ suite('authenticated actual HTTP session and repository isolation', () => {
     sid?: string,
     method = 'POST',
     body: unknown = { jsonrpc: '2.0', id: 7, method: 'ping' },
+    signal?: AbortSignal,
   ) {
     return app.request('http://localhost:3015/mcp', {
       method,
@@ -112,6 +116,7 @@ suite('authenticated actual HTTP session and repository isolation', () => {
         ...(method === 'GET' && sid ? { accept: 'text/event-stream' } : {}),
       },
       ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
+      ...(signal ? { signal } : {}),
     });
   }
   async function initialize(auth: string) {
@@ -397,6 +402,163 @@ suite('authenticated actual HTTP session and repository isolation', () => {
     expect(identity(one).sessionId).toBe(a);
     expect(identity(two).principal.subject).toBe('bob');
     expect(identity(two).sessionId).toBe(b);
+  });
+
+  it('deletes cwd only after a write that was active at close has finished', async () => {
+    const originalSet = storage.set.bind(storage);
+    const originalDelete = storage.delete.bind(storage);
+    const originalClose =
+      WebStandardStreamableHTTPServerTransport.prototype.close;
+    const events: string[] = [];
+    let writing!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      writing = resolve;
+    });
+    let finishWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+    let closed!: () => void;
+    const transportClosed = new Promise<void>((resolve) => {
+      closed = resolve;
+    });
+    const set = vi.spyOn(storage, 'set').mockImplementation(async (...args) => {
+      writing();
+      await writeGate;
+      await originalSet(...args);
+      events.push('write completed');
+    });
+    const remove = vi
+      .spyOn(storage, 'delete')
+      .mockImplementation(async (...args) => {
+        const deleted = await originalDelete(...args);
+        if (deleted) events.push('cwd deleted');
+        return deleted;
+      });
+    const close = vi
+      .spyOn(WebStandardStreamableHTTPServerTransport.prototype, 'close')
+      .mockImplementation(async function (
+        this: WebStandardStreamableHTTPServerTransport,
+      ) {
+        await originalClose.call(this);
+        closed();
+      });
+    const controller = new AbortController();
+    const requests: Promise<Response>[] = [];
+    try {
+      const alice = await token();
+      const sid = await initialize(alice);
+      const write = request(
+        alice,
+        sid,
+        'POST',
+        {
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'tools/call',
+          params: { name: 'git_set_working_dir', arguments: { path: first } },
+        },
+        controller.signal,
+      );
+      requests.push(write);
+      await Promise.race([
+        writeStarted,
+        write.then(() => {
+          throw new Error('The cwd write did not start');
+        }),
+      ]);
+
+      const termination = request(alice, sid, 'DELETE');
+      requests.push(termination);
+      await transportClosed;
+      expect(remove).not.toHaveBeenCalled();
+      controller.abort();
+      finishWrite();
+      expect((await termination).status).toBe(200);
+      expect(events).toEqual(['write completed', 'cwd deleted']);
+    } finally {
+      controller.abort();
+      finishWrite();
+      await Promise.allSettled(requests);
+      close.mockRestore();
+      remove.mockRestore();
+      set.mockRestore();
+    }
+  }, 30_000);
+
+  it('limits closing sessions and aborts a slow Supabase cleanup at the deadline', async () => {
+    const authenticated = app;
+    const security = config.httpSecurity;
+    let reportDelete!: (signal: AbortSignal) => void;
+    const deleteStarted = new Promise<AbortSignal>((resolve) => {
+      reportDelete = resolve;
+    });
+    let holdDelete = true;
+    const fetchStorage = Object.assign(
+      async (...[, options]: Parameters<typeof globalThis.fetch>) => {
+        if (!holdDelete) return new Response(null, { status: 204 });
+        holdDelete = false;
+        const signal = options?.signal;
+        if (!signal || options?.method !== 'DELETE')
+          throw new Error('Expected a cancellable storage delete');
+        signal.throwIfAborted();
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), {
+            once: true,
+          });
+          reportDelete(signal);
+        });
+      },
+      { preconnect: vi.fn() },
+    );
+    const supabase = createClient<Database, 'public'>(
+      'https://storage.example.test',
+      'synthetic-storage-service-key',
+      {
+        auth: { persistSession: false, autoRefreshToken: false },
+        global: { fetch: fetchStorage },
+      },
+    );
+    let isolated: ReturnType<typeof createHttpApp> | undefined;
+    let termination: Promise<Response> | undefined;
+    try {
+      config.httpSecurity = {
+        ...security,
+        maxSessions: 1,
+        maxSessionsPerPrincipal: 1,
+        requestTimeoutMs: 1_000,
+      };
+      container.registerInstance(
+        StorageToken,
+        new StorageService(new SupabaseProvider(supabase)),
+      );
+      app = isolated = createHttpApp(
+        makeServer,
+        requestContextService.createRequestContext(),
+      );
+      const alice = await token();
+      const bob = await token({ sub: 'bob' });
+      const sid = await initialize(alice);
+      termination = request(alice, sid, 'DELETE');
+      const signal = await Promise.race([
+        deleteStarted,
+        termination.then(() => {
+          throw new Error('The storage delete did not start');
+        }),
+      ]);
+      const full = await request(bob, undefined, 'POST', init);
+      expect(full.status).toBe(429);
+      await full.text();
+      expect((await termination).status).toBe(200);
+      expect(signal.aborted).toBe(true);
+      expect(await initialize(bob)).not.toBe(sid);
+    } finally {
+      await termination?.catch(() => {});
+      if (isolated) await closeHttpApp(isolated);
+      container.registerInstance(StorageToken, storage);
+      app = authenticated;
+      config.httpSecurity = security;
+    }
   });
 
   it.each(['storage', 'server', 'transport'] as const)(

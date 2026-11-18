@@ -97,12 +97,14 @@ export interface IStorageProvider {
    * Deletes a value from the storage.
    * @param key The unique key for the item to delete.
    * @param context The request context for logging and tracing.
+   * @param signal Cancellation for a pending backend request.
    * @returns A promise that resolves to true if the item was deleted, false if not found.
    */
   delete(
     tenantId: string,
     key: string,
     context: RequestContext,
+    signal?: AbortSignal,
   ): Promise<boolean>;
 
   /**
