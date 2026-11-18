@@ -35,6 +35,17 @@ describe('canonical repository filesystem boundary', () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+  it('rejects a filesystem root in an operator or request root list', () => {
+    const filesystemRoot = path.parse(dir).root;
+    expect(() => new RepositoryPathPolicy([roots[0]!, filesystemRoot])).toThrow(
+      'filesystem roots are not allowed',
+    );
+    const unbounded = new RepositoryPathPolicy();
+    expect(() => unbounded.restrict([filesystemRoot])).toThrow(
+      'filesystem roots are not allowed',
+    );
+  });
+
   it('authorizes both roots and nested new leaves without creating them', () => {
     for (const root of roots) {
       const result = policy.resolve(path.join(root, 'nested/new'));

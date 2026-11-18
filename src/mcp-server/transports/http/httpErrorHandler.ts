@@ -22,9 +22,9 @@ import { HttpLimitError } from './httpSecurity.js';
  * @param c - The Hono context object for the request.
  * @returns A Response object containing the formatted JSON-RPC error.
  */
-export const httpErrorHandler = (
+export const httpErrorHandler = <TEnv extends { Bindings: HonoNodeBindings }>(
   err: Error,
-  c: Context<{ Bindings: HonoNodeBindings }>,
+  c: Context<TEnv>,
 ): Response => {
   if (err instanceof HttpLimitError) {
     if (err.status === 429 || err.status === 503) c.header('Retry-After', '60');

@@ -26,6 +26,7 @@ export interface SpawnGitOptions {
   deadline?: number | undefined;
   allowNonZeroExit?: boolean | undefined;
   policy?: GitExecutionPolicy | undefined;
+  ceilingDirectories?: string | undefined;
 }
 
 /** Report the runtime without changing the process-control route. */
@@ -42,7 +43,7 @@ export function detectRuntime(): 'bun' | 'node' {
 export async function spawnGitCommand(
   args: string[],
   cwd: string,
-  env: Record<string, string>,
+  env: Record<string, string | undefined>,
   timeout?: number,
   signal?: AbortSignal,
   allowNonZeroExit = false,
@@ -51,6 +52,9 @@ export async function spawnGitCommand(
   const policy = options.policy ?? assertConfiguredGitExecutionPolicy();
   assertGitExecutionPolicy(policy);
   const limits = getConfiguredGitExecutionLimits();
+  const childEnv = buildGitEnv(env, policy);
+  if (options.ceilingDirectories !== undefined)
+    childEnv.GIT_CEILING_DIRECTORIES = options.ceilingDirectories;
   return superviseProcess({
     ...limits,
     timeoutMs: Math.min(
@@ -60,7 +64,7 @@ export async function spawnGitCommand(
     binaryPath: policy.binaryPath,
     args,
     cwd,
-    env: buildGitEnv(env, policy),
+    env: childEnv,
     signal: options.signal ?? signal,
     deadline: options.deadline,
     allowNonZeroExit: options.allowNonZeroExit ?? allowNonZeroExit,

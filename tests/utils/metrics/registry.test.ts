@@ -56,7 +56,7 @@ describe('metricsRegistry', () => {
   });
 
   it('creates and caches counters and histograms when enabled', () => {
-    configMock.openTelemetry.enabled = true;
+    config.openTelemetry.enabled = true;
 
     const counterWithOptions = {
       add: vi.fn(),
@@ -101,8 +101,8 @@ describe('metricsRegistry', () => {
     );
 
     expect(getMeterMock).toHaveBeenCalledWith(
-      configMock.openTelemetry.serviceName,
-      configMock.openTelemetry.serviceVersion,
+      config.openTelemetry.serviceName,
+      config.openTelemetry.serviceVersion,
     );
     expect(meterMock.createCounter).toHaveBeenCalledWith('requests_total', {
       description: 'Number of successful requests',

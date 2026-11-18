@@ -5,8 +5,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { installTrustedGitFixture } from '../../../../../../mcp-server/tools/definitions/helpers/testContext.js';
-installTrustedGitFixture();
 const canonicalWorktree = join(realpathSync('/tmp'), 'worktree');
 
 import { executeWorktree } from '@/services/git/providers/cli/operations/worktree/worktree.js';

@@ -22,6 +22,20 @@ interface ExecutionState {
   closing: boolean;
 }
 
+function recordFailure(
+  state: ExecutionState,
+  error: GitExecutionError,
+): GitExecutionError {
+  if (
+    state.failure === undefined ||
+    (error.reason === 'CLEANUP_FAILED' &&
+      state.failure.reason !== 'CLEANUP_FAILED')
+  ) {
+    state.failure = error;
+  }
+  return state.failure;
+}
+
 const executionContext = new AsyncLocalStorage<GitExecutionContext>();
 const executionStates = new WeakMap<GitExecutionContext, ExecutionState>();
 
@@ -50,6 +64,12 @@ export async function withGitExecutionContext<T>(
       'Invalid Git request deadline.',
     );
   }
+  if (remaining !== undefined && remaining <= 0) {
+    throw new GitExecutionError(
+      'DEADLINE',
+      'Git operation deadline exceeded before execution.',
+    );
+  }
   const controller = new AbortController();
   const state: ExecutionState = {
     controller,
@@ -63,25 +83,17 @@ export async function withGitExecutionContext<T>(
   executionStates.set(scoped, state);
   let timer: ReturnType<typeof setTimeout> | undefined;
   if (remaining !== undefined) {
-    if (remaining <= 0) {
-      state.failure = new GitExecutionError(
+    timer = setTimeout(() => {
+      state.failure ??= new GitExecutionError(
         'DEADLINE',
-        'Git operation deadline exceeded before execution.',
+        'Git operation deadline exceeded.',
       );
       controller.abort();
-    } else
-      timer = setTimeout(() => {
-        state.failure ??= new GitExecutionError(
-          'DEADLINE',
-          'Git operation deadline exceeded.',
-        );
-        controller.abort();
-      }, remaining);
+    }, remaining);
   }
 
   return executionContext.run(scoped, async () => {
     try {
-      if (state.failure) throw state.failure;
       if (controller.signal.aborted)
         throw new GitExecutionError(
           'CANCELLED',
@@ -95,11 +107,15 @@ export async function withGitExecutionContext<T>(
         );
       state.closing = true;
       if (state.pending.size > 0) {
-        if (outcome.ok)
-          state.failure ??= new GitExecutionError(
-            'CLEANUP_FAILED',
-            'Git operation returned with active processes.',
+        if (outcome.ok) {
+          recordFailure(
+            state,
+            new GitExecutionError(
+              'CLEANUP_FAILED',
+              'Git operation returned with active processes.',
+            ),
           );
+        }
         controller.abort();
         await Promise.allSettled([...state.pending]);
       }
@@ -133,7 +149,7 @@ export function getGitOutputBudget(limit: number): GitOutputBudget {
   return state.budget;
 }
 
-/** Reject late calls after a request ended, and preserve its first control failure. */
+/** Reject late calls and report the first control failure, with cleanup taking priority. */
 export function getGitExecutionFailure(): GitExecutionError | undefined {
   const state = getState();
   return (
@@ -153,9 +169,9 @@ export function recordGitExecutionFailure(
 ): GitExecutionError {
   const state = getState();
   if (state) {
-    state.failure ??= error;
+    const failure = recordFailure(state, error);
     state.controller.abort();
-    return state.failure;
+    return failure;
   }
   return error;
 }
@@ -168,7 +184,7 @@ export function trackGitExecution<T>(promise: Promise<T>): Promise<T> {
   state.pending.add(tracked);
   void tracked.catch((error: unknown) => {
     if (error instanceof GitExecutionError) {
-      state.failure ??= error;
+      recordFailure(state, error);
       state.controller.abort();
     }
   });

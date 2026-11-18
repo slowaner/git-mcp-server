@@ -80,6 +80,7 @@ export class RepositoryPathPolicy {
           'configured root cannot be represented by native discovery ceiling',
         );
       let ancestor = path.dirname(absolute);
+      if (ancestor === absolute) denied('filesystem roots are not allowed');
       for (;;) {
         const parentStat = lstatSync(ancestor);
         // System aliases (/var -> /private/var on macOS) are immutable under
@@ -97,9 +98,12 @@ export class RepositoryPathPolicy {
       const stat = lstatSync(absolute);
       if (!stat.isDirectory() || stat.isSymbolicLink())
         denied('root must be a real directory');
+      const canonical = realpathSync(absolute);
+      if (path.dirname(canonical) === canonical)
+        denied('filesystem roots are not allowed');
       return {
         input: absolute,
-        canonical: realpathSync(absolute),
+        canonical,
         dev: stat.dev,
         ino: stat.ino,
       };

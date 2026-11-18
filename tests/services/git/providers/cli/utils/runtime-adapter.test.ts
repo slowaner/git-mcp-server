@@ -26,7 +26,6 @@ describe('Runtime Adapter', () => {
   let savedGit: typeof config.git;
   beforeEach(() => {
     savedGit = { ...config.git };
-    config.git.executionProfile = 'trusted';
     config.git.binaryPath = '/usr/bin/git';
   });
   afterEach(() => {

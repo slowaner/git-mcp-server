@@ -17,7 +17,6 @@ export interface HealthSnapshot {
   };
   telemetry: {
     enabled: boolean;
-    diagLevel: string | undefined;
   };
   logging: {
     initialized: boolean;
@@ -38,7 +37,6 @@ export function getHealthSnapshot(): HealthSnapshot {
     },
     telemetry: {
       enabled: Boolean(config.openTelemetry.enabled),
-      diagLevel: config.openTelemetry.logLevel,
     },
     logging: {
       initialized: logger.isInitialized(),

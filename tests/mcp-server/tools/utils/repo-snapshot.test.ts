@@ -7,8 +7,6 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 
 import { gatherRepoSnapshot } from '@/mcp-server/tools/utils/repo-snapshot.js';
-import { installTrustedGitFixture } from '../definitions/helpers/testContext.js';
-installTrustedGitFixture();
 import type {
   GitLogResult,
   GitRemoteResult,

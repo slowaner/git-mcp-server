@@ -3,14 +3,17 @@
  * @module tests/services/git/providers/cli/utils/runtime-security.test
  */
 import assert from 'node:assert/strict';
+import { ChildProcess, spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { GitExecutionError } from '../../../../../../src/services/git/providers/cli/utils/execution-errors.js';
+import { GIT_PROCESS_HOST_SOURCE } from '../../../../../../src/services/git/providers/cli/utils/process-host.js';
 import {
   getGitExecutionContext,
+  trackGitExecution,
   withGitExecutionContext,
 } from '../../../../../../src/services/git/providers/cli/utils/execution-context.js';
 import {
@@ -24,7 +27,6 @@ import {
 } from '../../../../../../src/services/git/providers/cli/utils/process-supervision.js';
 
 const trusted: GitExecutionPolicy = {
-  profile: 'trusted',
   binaryPath: '/usr/bin/git',
   homeDirectory: '/tmp',
   helperPath: '/usr/bin:/bin',
@@ -36,13 +38,7 @@ const reason = (expected: string) => (error: unknown) => {
 };
 
 describe('Git execution policy', () => {
-  it('rejects restricted profile on every platform before any child program', () => {
-    assert.throws(
-      () => assertGitExecutionPolicy({ ...trusted, profile: 'restricted' }),
-      reason('POLICY_UNSUPPORTED'),
-    );
-  });
-  it('cannot promote an untrusted canonical repository by selecting trusted mode', () => {
+  it('rejects a canonical repository classified as untrusted', () => {
     assert.throws(
       () =>
         assertGitExecutionPolicy(trusted, {
@@ -111,6 +107,37 @@ describe('Git execution policy', () => {
 });
 
 describe('request lifetime propagation', () => {
+  for (const [nativeReason, expectedReason] of [
+    ['CLEANUP_FAILED', 'CLEANUP_FAILED'],
+    ['CANCELLED', 'DEADLINE'],
+  ] as const) {
+    it(`reports ${expectedReason} when process cleanup returns ${nativeReason} after the request deadline`, async () => {
+      const startedAt = Date.now();
+      await assert.rejects(
+        withGitExecutionContext(
+          { startedAt, deadline: startedAt + 100 },
+          async () => {
+            const signal = getGitExecutionContext()?.signal;
+            assert.ok(signal);
+            return trackGitExecution(
+              new Promise<never>((_, reject) => {
+                signal.addEventListener(
+                  'abort',
+                  () =>
+                    reject(
+                      new GitExecutionError(nativeReason, 'Test failure.'),
+                    ),
+                  { once: true },
+                );
+              }),
+            );
+          },
+        ),
+        reason(expectedReason),
+      );
+    });
+  }
+
   it('keeps concurrent SDK signal/deadline scopes independent across async boundaries', async () => {
     const a = new AbortController();
     const b = new AbortController();
@@ -319,6 +346,44 @@ describe('real process supervision', { timeout: 15000 }, () => {
     await assert.rejects(task, reason('CANCELLED'));
     await assert.rejects(readFile(path.join(directory, 'spawned')));
   });
+  for (const stream of ['stdout', 'stderr'] as const) {
+    it(`reports a ${stream} failure during cancellation as CLEANUP_FAILED`, async () => {
+      const controller = new AbortController();
+      const emit = ChildProcess.prototype.emit;
+      ChildProcess.prototype.emit = function (
+        this: ChildProcess,
+        event: string | symbol,
+        ...args: unknown[]
+      ): boolean {
+        const emitted = Reflect.apply(emit, this, [event, ...args]) as boolean;
+        if (
+          event === 'spawn' &&
+          this.spawnargs.includes(GIT_PROCESS_HOST_SOURCE)
+        ) {
+          ChildProcess.prototype.emit = emit;
+          controller.abort();
+          this[stream]?.emit(
+            'error',
+            new Error('Simulated output pipe failure.'),
+          );
+        }
+        return emitted;
+      };
+      try {
+        await assert.rejects(
+          run('', { signal: controller.signal }),
+          (error: unknown) => {
+            assert.ok(error instanceof GitExecutionError);
+            assert.equal(error.reason, 'CLEANUP_FAILED');
+            assert.equal(error.message, `Git ${stream} stream failed.`);
+            return true;
+          },
+        );
+      } finally {
+        ChildProcess.prototype.emit = emit;
+      }
+    });
+  }
   it('does not let Git forge its private host exit protocol through fd3', async () => {
     const source =
       "try { require('node:fs').writeSync(3, JSON.stringify({type:'exit',code:0,signal:null})+'\\n'); } catch {} process.exitCode=7;";
@@ -372,7 +437,7 @@ describe('real process supervision', { timeout: 15000 }, () => {
       );
     }
   });
-  it('escalates past ignored SIGTERM after cancellation and removes listener', async () => {
+  it('escalates past ignored SIGTERM after cancellation', async () => {
     const controller = new AbortController();
     const source =
       "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync('ready',String(process.pid)); setInterval(()=>{},100)";
@@ -389,7 +454,23 @@ describe('real process supervision', { timeout: 15000 }, () => {
     assert.ok(pid > 0);
     controller.abort();
     await assert.rejects(task, reason('CANCELLED'));
-    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    // A killed orphan can remain in the process table until it is reaped.
+    const inspection = spawnSync(
+      '/bin/ps',
+      ['-o', 'stat=', '-p', String(pid)],
+      {
+        encoding: 'utf8',
+        timeout: 1000,
+      },
+    );
+    assert.equal(inspection.error, undefined);
+    assert.equal(inspection.stderr, '');
+    if (inspection.status === 1) {
+      assert.equal(inspection.stdout.trim(), '');
+    } else {
+      assert.equal(inspection.status, 0);
+      assert.match(inspection.stdout.trim(), /^[ZX]/);
+    }
   });
   it('honors the configured deadline instead of a fixed 60 seconds', async () => {
     const start = Date.now();

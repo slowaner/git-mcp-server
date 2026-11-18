@@ -55,8 +55,9 @@ Works with both Bun and Node.js. Runtime is auto-detected.
 
 ### MCP client configuration
 
-Add the following to your MCP client config (e.g., `cline_mcp_settings.json`). Update the environment variables to match
-your setup — especially the git identity fields.
+Add the following to your MCP client config (e.g., `cline_mcp_settings.json`).
+Native Git runs on macOS and Linux. Use repositories and Git configuration
+you trust to run with your account permissions.
 
 ```json
 {
@@ -68,11 +69,7 @@ your setup — especially the git identity fields.
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_LOG_LEVEL": "info",
-        "GIT_BASE_DIR": "~/Developer/",
-        "LOGS_DIR": "~/Developer/logs/git-mcp-server/",
-        "GIT_USERNAME": "cyanheads",
-        "GIT_EMAIL": "casey@caseyjhand.com",
-        "GIT_SIGN_COMMITS": "true"
+        "GIT_BASE_DIR": "~/repos,~/projects"
       }
     }
   }
@@ -81,7 +78,17 @@ your setup — especially the git identity fields.
 
 Bun users: replace `"command": "npx"` with `"command": "bunx"`.
 
-For Streamable HTTP, set `MCP_TRANSPORT_TYPE=http` and `MCP_HTTP_PORT=3015`.
+The first `GIT_BASE_DIR` entry anchors relative repository paths. Use an
+absolute path to select a repository under another entry, or use
+`git_set_working_dir` and then pass `.` for the session directory.
+Roots limit the paths accepted by the server. Git and its helpers run with the
+operator's OS permissions.
+
+For local Streamable HTTP, set `MCP_TRANSPORT_TYPE=http`,
+`MCP_HTTP_HOST=127.0.0.1`, and `MCP_HTTP_PORT=3015` in the server environment.
+The same directory rules apply.
+See the [native Git execution policy](docs/security/git-execution.md) for
+platform support and environment configuration.
 
 ## Features
 
@@ -92,8 +99,8 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 | Declarative tools            | Define capabilities in single, self-contained files. The framework handles registration, validation, and execution.                                                                                                               |
 | Error handling               | Unified `McpError` system for consistent, structured error responses.                                                                                                                                                             |
 | Authentication               | Supports `none`, `jwt`, and `oauth` modes.                                                                                                                                                                                        |
-| Pluggable storage            | Swap backends (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2`) without changing business logic.                                                                                                                        |
-| Observability                | Structured logging (Pino) and optional auto-instrumented OpenTelemetry for traces and metrics.                                                                                                                                    |
+| Pluggable storage            | Swap backends (`in-memory`, `filesystem`, `Supabase`) without changing business logic.                                                                                                                                            |
+| Observability                | Local structured logging with Pino.                                                                                                                                                                                               |
 | Dependency injection         | Built with `tsyringe` for decoupled, testable architecture.                                                                                                                                                                       |
 | Cross-runtime                | Auto-detects Bun or Node.js and uses the appropriate process spawning method.                                                                                                                                                     |
 | Provider architecture        | Pluggable git provider system. Current: CLI. Planned: isomorphic-git for edge deployment.                                                                                                                                         |
@@ -105,7 +112,7 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 ## Security
 
 - All file paths are validated and sanitized to prevent directory traversal.
-- Optional `GIT_BASE_DIR` restricts Git paths to one or more explicitly allowed directory trees. This lexical check is not an OS sandbox.
+- Optional `GIT_BASE_DIR` restricts Git paths and repository metadata to one or more explicitly allowed directory trees.
 - Git commands use validated arguments via process spawning — no shell interpolation.
 - JWT and OAuth support for authenticated deployments.
 - Optional rate limiting via the DI-managed `RateLimiter` service.
@@ -123,6 +130,8 @@ without that explicit request, leaving native configuration active. The retry
 can still sign or fail. Commit/tag `signed` reports signature presence, not trust
 verification; `signingWarning` reports a retry.
 
+The standalone server writes logs locally and ignores legacy OTLP exporter settings.
+
 All configuration is validated at startup in `src/config/index.ts`. Key environment variables:
 
 | Variable                       | Description                                                                                                                                                                                                  | Default     |
@@ -135,13 +144,12 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 | `MCP_HTTP_HOST`                | HTTP server hostname.                                                                                                                                                                                        | `127.0.0.1` |
 | `MCP_HTTP_ENDPOINT_PATH`       | MCP request endpoint path.                                                                                                                                                                                   | `/mcp`      |
 | `MCP_AUTH_MODE`                | Authentication mode: `none`, `jwt`, or `oauth`.                                                                                                                                                              | `none`      |
-| `STORAGE_PROVIDER_TYPE`        | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv`, `r2`.                                                                                                                               | `in-memory` |
-| `OTEL_ENABLED`                 | Enable OpenTelemetry.                                                                                                                                                                                        | `false`     |
+| `STORAGE_PROVIDER_TYPE`        | Storage backend: `in-memory`, `filesystem`, `supabase`.                                                                                                                                                      | `in-memory` |
 | `MCP_LOG_LEVEL`                | Minimum log level: `debug`, `info`, `warn`, `error`.                                                                                                                                                         | `info`      |
 | `GIT_SIGN_COMMITS`             | Explicit signing for commits, tags, merges, rebases, cherry-picks, and pulls; `false` defers to native Git config. Only commit/tag retries remove the explicit signing flag (see `signed`/`signingWarning`). | `true`      |
 | `GIT_AUTHOR_NAME`              | Git author name. Aliases: `GIT_USERNAME`, `GIT_USER`. Falls back to global git config.                                                                                                                       | `(none)`    |
 | `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                                                                                   | `(none)`    |
-| `GIT_BASE_DIR`                 | Comma-separated absolute directory roots; the first anchors relative repository paths. Tilde expansion is supported; literal commas in roots are not.                                                        | `(none)`    |
+| `GIT_BASE_DIR`                 | Comma-separated absolute directories; the first anchors relative paths. Tilde expansion is supported. Filesystem roots and literal commas are disallowed.                                                        | `(none)`    |
 | `GIT_WRAPUP_INSTRUCTIONS_PATH` | Path to custom markdown file with workflow instructions.                                                                                                                                                     | `(none)`    |
 | `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ character secret key.                                                                                                                                                           | `(none)`    |
 | `OAUTH_ISSUER_URL`             | Required for `oauth` auth. OIDC provider URL.                                                                                                                                                                | `(none)`    |
@@ -154,7 +162,9 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 npx @cyanheads/git-mcp-server@latest
 ```
 
-Configure through environment variables or your MCP client config.
+Provide configuration through inherited environment variables or your MCP client
+config. The server does not load a `.env` file. When using native Bun, launch
+from a trusted directory and follow the [Bun startup guidance](docs/security/git-execution.md#supported-platforms-and-repository-trust).
 
 ### Local development
 
@@ -169,14 +179,6 @@ npm run dev:stdio     # or dev:http
 # Checks and tests
 npm run devcheck      # lint, format, typecheck
 npm test
-```
-
-### Cloudflare Workers
-
-```sh
-npm run build:worker   # Build the worker bundle
-npm run deploy:dev     # Run locally with Wrangler
-npm run deploy:prod    # Deploy to Cloudflare
 ```
 
 ## Project structure
@@ -245,8 +247,7 @@ bun run devcheck      # Lint, format, typecheck, audit
 The server uses a provider-based architecture for git operations:
 
 - **CLI provider** (current) — Full 28-tool coverage via native git CLI. Requires local git installation.
-- **Isomorphic git provider** (planned) — Pure JS implementation for edge deployment (Cloudflare Workers, Vercel Edge,
-  Deno Deploy). Uses [isomorphic-git](https://isomorphic-git.org/).
+- **Isomorphic git provider** (planned) — Pure JS implementation using [isomorphic-git](https://isomorphic-git.org/).
 - **GitHub API provider** (maybe) — Cloud-native operations via GitHub REST/GraphQL APIs, no local repo required.
 
 ## Contributing
@@ -283,8 +284,9 @@ Apache 2.0. See [LICENSE](./LICENSE).
 ```
 
 Entries are trimmed, normalized, and deduplicated in order. Empty entries,
-whitespace-only values, and relative roots are configuration errors; unset keeps
-the existing unrestricted-root behavior. A literal comma in a root is not supported.
+relative paths, and filesystem roots such as `/` are configuration errors.
+An unset value keeps the existing unrestricted-root behavior. Use entries
+without literal commas.
 Relative repository paths resolve only against the first root, never by searching
 all roots. Absolute paths may be inside any root. `.` still uses the stored working
 directory; it does not select the first root automatically. Stored directories
@@ -294,9 +296,8 @@ inspection, initialization, or persistence. Clone destinations/local sources and
 worktree add/remove/move paths use the same allowlist. Relative extra worktree
 paths resolve against the selected repository cwd, as Git expects.
 
-This is lexical path validation, not filesystem isolation: symlink/realpath
-hardening is separate. Linked worktrees share repository metadata through their
-`.git` file; the allowlist does not confine Git's metadata, configuration, hooks,
-network access, or inherited environment. Do not use symlinks to bypass a denied
-path. Changing configuration requires an explicit server restart; it is not
-hot-reloaded and does not relocate existing worktrees.
+With roots configured, Git repository discovery stops at the allowed trees.
+A linked worktree and its shared repository metadata must both be under allowed
+roots. Symlinks beneath an allowed root are rejected. Run the server with
+repositories you trust and use OS isolation if untrusted users can concurrently
+change those trees. Restart the server to apply configuration changes.

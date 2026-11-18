@@ -229,20 +229,20 @@ export class PrivateFileStore {
       0o600,
     );
     try {
-      const stat = fstatSync(fd);
-      if (
-        !stat.isFile() ||
-        stat.nlink !== 1 ||
-        stat.uid !== process.getuid!() ||
-        (stat.mode & 0o777) !== 0o600
-      )
-        deny();
-      writeFileSync(fd, value, 'utf8');
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    try {
+      try {
+        const stat = fstatSync(fd);
+        if (
+          !stat.isFile() ||
+          stat.nlink !== 1 ||
+          stat.uid !== process.getuid!() ||
+          (stat.mode & 0o777) !== 0o600
+        )
+          deny();
+        writeFileSync(fd, value, 'utf8');
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
       this.checkDirectory(this.root, this.identity);
       this.checkDirectory(parent.directory, parent.identity);
       this.checkFile(filename);

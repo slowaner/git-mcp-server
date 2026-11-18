@@ -84,7 +84,6 @@ describe(
       mkdirSync(home, { mode: 0o700 });
       const env = buildTrustedGitEnvironment(
         {
-          profile: 'trusted',
           binaryPath: '/usr/bin/git',
           homeDirectory: home,
           helperPath: '/usr/bin:/bin',

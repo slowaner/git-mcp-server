@@ -3,7 +3,6 @@
  * @module tests/mcp-server/tools/definitions/unit/git-wrapup-instructions.tool.test
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitWrapupInstructionsTool } from '@/mcp-server/tools/definitions/git-wrapup-instructions.tool.js';
@@ -64,8 +63,6 @@ function primeSnapshotMocks(
   mockProvider.log.mockResolvedValue(logResult);
   mockProvider.tag.mockResolvedValue(tagResult);
 }
-
-installTrustedGitFixture();
 
 describe('git_wrapup_instructions tool', () => {
   const mockProvider = createMockGitProvider();

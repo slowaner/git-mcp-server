@@ -144,7 +144,6 @@ tsconfig.test.json export-ignore
 vitest.config.ts export-ignore
 vitest.integration.config.ts export-ignore
 bunfig.toml export-ignore
-wrangler.toml export-ignore
 Dockerfile export-ignore
 .dockerignore export-ignore
 .env.example export-ignore

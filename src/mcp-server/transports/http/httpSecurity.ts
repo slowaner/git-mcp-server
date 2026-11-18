@@ -73,7 +73,7 @@ export const HttpSecuritySchema = z
     requestTimeoutMs: limit(
       60000,
       300000,
-      'Operation deadline, retained through response completion.',
+      'Factory, operation, and non-SSE response deadline.',
     ),
     streamTimeoutMs: limit(60000, 300000, 'Maximum standalone SSE lifetime.'),
     maxRequests: limit(32, 1024, 'Global concurrent HTTP requests.'),

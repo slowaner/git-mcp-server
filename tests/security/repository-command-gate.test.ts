@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { config } from '@/config/index.js';
 import { CliGitProvider } from '@/services/git/providers/cli/CliGitProvider.js';
@@ -59,13 +59,39 @@ describe('production repository command gate', () => {
         GIT_CONFIG_GLOBAL: '/dev/null',
       },
     });
-    config.git.executionProfile = 'trusted';
     config.git.baseDirs = [first, second];
     config.git.trustedHome = temporary;
   });
   afterEach(() => {
     Object.assign(config.git, saved);
     rmSync(temporary, { recursive: true, force: true });
+  });
+
+  it('passes only the server-computed discovery ceiling to native Git', async () => {
+    const binary = join(temporary, 'git-env-fixture');
+    writeFileSync(
+      binary,
+      '#!/bin/sh\nprintf "%s" "$GIT_CEILING_DIRECTORIES"\n',
+      { mode: 0o700 },
+    );
+    config.git.binaryPath = binary;
+    const inherited = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = outside;
+    try {
+      const nested = join(first, 'nested');
+      const otherRoot = join(outside, 'root');
+      mkdirSync(nested);
+      mkdirSync(otherRoot);
+      config.git.baseDirs = [first, nested, second, otherRoot];
+      const result = await executeGitCommand(['--version'], repo);
+      expect(result.stdout).toBe([temporary, outside].join(delimiter));
+      config.git.baseDirs = undefined;
+      const unbounded = await executeGitCommand(['--version'], repo);
+      expect(unbounded.stdout).toBe('');
+    } finally {
+      if (inherited === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = inherited;
+    }
   });
 
   it('uses actual provider with narrow roots and rejects empty grants before mkdir', async () => {
