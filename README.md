@@ -55,8 +55,9 @@ Works with both Bun and Node.js. Runtime is auto-detected.
 
 ### MCP client configuration
 
-Add the following to your MCP client config (e.g., `cline_mcp_settings.json`). Update the environment variables to match
-your setup — especially the git identity fields.
+Add the following to your MCP client config (e.g., `cline_mcp_settings.json`).
+Native Git runs on macOS and Linux. Use repositories and Git configuration
+you trust to run with your account permissions.
 
 ```json
 {
@@ -68,11 +69,7 @@ your setup — especially the git identity fields.
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_LOG_LEVEL": "info",
-        "GIT_BASE_DIR": "~/Developer/",
-        "LOGS_DIR": "~/Developer/logs/git-mcp-server/",
-        "GIT_USERNAME": "cyanheads",
-        "GIT_EMAIL": "casey@caseyjhand.com",
-        "GIT_SIGN_COMMITS": "true"
+        "GIT_BASE_DIR": "~/repos,~/projects"
       }
     }
   }
@@ -81,7 +78,17 @@ your setup — especially the git identity fields.
 
 Bun users: replace `"command": "npx"` with `"command": "bunx"`.
 
-For Streamable HTTP, set `MCP_TRANSPORT_TYPE=http` and `MCP_HTTP_PORT=3015`.
+The first `GIT_BASE_DIR` entry anchors relative repository paths. Use an
+absolute path to select a repository under another entry, or use
+`git_set_working_dir` and then pass `.` for the session directory.
+Roots limit the paths accepted by the server. Git and its helpers run with the
+operator's OS permissions.
+
+For local Streamable HTTP, set `MCP_TRANSPORT_TYPE=http`,
+`MCP_HTTP_HOST=127.0.0.1`, and `MCP_HTTP_PORT=3015` in the server environment.
+The same directory rules apply.
+See the [native Git execution policy](docs/security/git-execution.md) for
+platform support and environment configuration.
 
 ## Features
 
@@ -155,7 +162,9 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 npx @cyanheads/git-mcp-server@latest
 ```
 
-Configure through environment variables or your MCP client config.
+Provide configuration through inherited environment variables or your MCP client
+config. The server does not load a `.env` file. When using native Bun, launch
+from a trusted directory and follow the [Bun startup guidance](docs/security/git-execution.md#supported-platforms-and-repository-trust).
 
 ### Local development
 

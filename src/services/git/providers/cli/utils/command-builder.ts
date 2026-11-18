@@ -4,6 +4,11 @@
  */
 
 import { loadConfig } from './config-helper.js';
+import { getConfiguredGitExecutionPolicy } from './configured-execution-policy.js';
+import {
+  buildTrustedGitEnvironment,
+  type GitExecutionPolicy,
+} from './execution-policy.js';
 
 /**
  * Git command configuration.
@@ -48,56 +53,21 @@ export function buildGitCommand(config: GitCommandConfig): string[] {
 }
 
 /**
- * Build environment variables for git command.
- *
- * This function preserves the existing process environment (including PATH)
- * to ensure git executable can be found, while adding git-specific settings.
- *
- * Automatically includes git author/committer information from config if available.
- *
- * @param additionalEnv - Additional environment variables to override defaults
- * @returns Combined environment object with PATH preserved
+ * Build the allowlisted environment under explicit operator authority.
+ * Inherited GIT routing/config variables and unrelated server secrets are dropped.
  */
 export function buildGitEnv(
-  additionalEnv?: Record<string, string>,
+  inherited: Record<string, string | undefined> = process.env,
+  policy: GitExecutionPolicy = getConfiguredGitExecutionPolicy(),
 ): Record<string, string> {
-  // Start with existing environment to preserve PATH and other critical vars
-  // This ensures git executable can be found in custom install locations
-  const env: Record<string, string> = { ...process.env } as Record<
-    string,
-    string
-  >;
-
-  // Override with git-specific settings
-  Object.assign(env, {
-    GIT_TERMINAL_PROMPT: '0', // Disable interactive prompts
-    LANG: 'en_US.UTF-8', // Ensure git uses UTF-8 encoding
-    LC_ALL: 'en_US.UTF-8',
-  });
-
-  // Load git author/committer info from config if available
-  // This allows consistent author identity across all git operations
+  const env = buildTrustedGitEnvironment(policy, inherited);
   const config = loadConfig();
-  if (config?.git) {
-    if (config.git.authorName) {
-      env.GIT_AUTHOR_NAME = config.git.authorName;
-    }
-    if (config.git.authorEmail) {
-      env.GIT_AUTHOR_EMAIL = config.git.authorEmail;
-    }
-    if (config.git.committerName) {
-      env.GIT_COMMITTER_NAME = config.git.committerName;
-    }
-    if (config.git.committerEmail) {
-      env.GIT_COMMITTER_EMAIL = config.git.committerEmail;
-    }
-  }
-
-  // Apply any additional overrides (highest priority)
-  if (additionalEnv) {
-    Object.assign(env, additionalEnv);
-  }
-
+  if (config?.git.authorName) env.GIT_AUTHOR_NAME = config.git.authorName;
+  if (config?.git.authorEmail) env.GIT_AUTHOR_EMAIL = config.git.authorEmail;
+  if (config?.git.committerName)
+    env.GIT_COMMITTER_NAME = config.git.committerName;
+  if (config?.git.committerEmail)
+    env.GIT_COMMITTER_EMAIL = config.git.committerEmail;
   return env;
 }
 
@@ -128,6 +98,15 @@ const SAFE_GIT_OPTIONS = new Set([
   '--verify',
   // Read effective native signing configuration.
   '--get',
+  '--null',
+  '--includes',
+  '--show-origin',
+  '--raw',
+  '-z',
+  '-s',
+  '-p',
+  '-n',
+  '-x',
   '--type',
   // Message-taking commands (commit, merge, stash push, tag) emit the message
   // attached (`--message=<text>`) so a message that starts with `-` is never a
@@ -256,7 +235,7 @@ const SAFE_GIT_OPTIONS = new Set([
  *
  * Defense:
  * 1. Null bytes are rejected (corrupt many internal C string boundaries).
- * 2. Every `-`-prefixed argument must be a short flag (`-x`), one of the
+ * 2. Every `-`-prefixed argument must be an allowlisted short flag, one of the
  *    attached-value short forms the operations emit (`-n<count>`,
  *    `-L<start>,<end>`), or a long flag whose **name** (the part before any
  *    `=value`) is in `SAFE_GIT_OPTIONS`. Unknown flags throw — there is no
@@ -282,8 +261,7 @@ export function validateGitArgs(args: string[]): void {
     }
 
     const flagName = arg.split('=')[0] || arg;
-    const isShortFlag =
-      /^-[a-zA-Z]$/.test(flagName) || SHORT_FLAG_WITH_VALUE.test(arg);
+    const isShortFlag = SHORT_FLAG_WITH_VALUE.test(arg);
     const isSafeOption = SAFE_GIT_OPTIONS.has(flagName);
 
     if (!isShortFlag && !isSafeOption) {

@@ -21,6 +21,12 @@ import type { RequestContext } from '@/utils/index.js';
  * multi-tenant deployments.
  */
 export interface GitOperationContext {
+  /** SDK/provider cancellation; no process may outlive the owning request. */
+  readonly signal?: AbortSignal | undefined;
+  /** Absolute operation deadline in milliseconds since the Unix epoch. */
+  readonly deadline?: number | undefined;
+  /** Internal server-authorized root ceiling. Absent and empty are distinct. */
+  readonly repositoryRoots?: readonly string[] | undefined;
   /** Request context for logging and tracing */
   requestContext: RequestContext;
   /** Working directory (repository path) */

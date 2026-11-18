@@ -14,15 +14,24 @@ it('enforces GIT_MAX_COMMAND_TIMEOUT_MS when running Git', () => {
       'bun',
       '-e',
       `import { executeGitCommand } from '@/services/git/providers/cli/utils/git-executor.js';
-     await executeGitCommand(['-c', 'alias.wait-for-timeout=!sleep 1', 'wait-for-timeout'], process.cwd());`,
+      try {
+        await executeGitCommand(['1'], process.cwd());
+      } catch (error) {
+        console.error(error.data?.reason);
+        process.exitCode = 1;
+      }`,
     ],
-    { env: { ...process.env, GIT_MAX_COMMAND_TIMEOUT_MS: '50' } },
+    {
+      env: {
+        ...process.env,
+        GIT_BINARY_PATH: '/bin/sleep',
+        GIT_MAX_COMMAND_TIMEOUT_MS: '50',
+      },
+    },
   );
 
-  expect(result.exitCode).not.toBe(0);
-  expect(result.stderr.toString()).toContain(
-    'Git command timed out after 0.05s',
-  );
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr.toString().trim()).toBe('DEADLINE');
 });
 
 describe('executeGitCommand cwd pre-flight', () => {

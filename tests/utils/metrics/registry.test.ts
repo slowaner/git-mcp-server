@@ -3,6 +3,7 @@
  * @module tests/utils/metrics/registry.test
  */
 import {
+  afterAll,
   afterEach,
   beforeAll,
   beforeEach,
@@ -12,21 +13,22 @@ import {
   vi,
 } from 'vitest';
 import { config } from '@/config/index.js';
+import { metrics } from '@opentelemetry/api';
 
 const meterMock = {
   createCounter: vi.fn(),
   createHistogram: vi.fn(),
 };
-const getMeterMock = vi.fn(() => meterMock);
-const originalEnabled = config.openTelemetry.enabled;
-
-vi.mock('@opentelemetry/api', () => ({
-  metrics: {
-    getMeter: getMeterMock,
-  },
-}));
+const getMeterMock = vi
+  .spyOn(metrics, 'getMeter')
+  .mockReturnValue(meterMock as unknown as ReturnType<typeof metrics.getMeter>);
+const configMock = config;
+let savedEnabled: boolean;
 
 let metricsRegistry: typeof import('../../../src/utils/metrics/registry.js').metricsRegistry;
+afterAll(() => {
+  getMeterMock.mockRestore();
+});
 
 beforeAll(async () => {
   ({ metricsRegistry } =
@@ -34,15 +36,15 @@ beforeAll(async () => {
 });
 
 describe('metricsRegistry', () => {
-  afterEach(() => {
-    config.openTelemetry.enabled = originalEnabled;
-  });
-
   beforeEach(() => {
-    config.openTelemetry.enabled = false;
+    savedEnabled = configMock.openTelemetry.enabled;
+    configMock.openTelemetry.enabled = false;
     getMeterMock.mockClear();
     meterMock.createCounter.mockReset();
     meterMock.createHistogram.mockReset();
+  });
+  afterEach(() => {
+    configMock.openTelemetry.enabled = savedEnabled;
   });
 
   it('returns no-op meters when OpenTelemetry is disabled', () => {

@@ -6,6 +6,10 @@
  * @module src/mcp-server/tools/utils/toolHandlerFactory
  */
 import { container } from 'tsyringe';
+import {
+  assertConfiguredGitExecutionPolicy,
+  withConfiguredGitExecutionContext,
+} from '@/services/git/providers/cli/utils/configured-execution-policy.js';
 
 import {
   GitProviderFactory as GitProviderFactoryToken,
@@ -181,7 +185,10 @@ export function createMcpToolHandler<
     try {
       const result = await measureToolExecution(
         // Pass both the app's internal context and the full SDK context to the logic.
-        () => logic(input, appContext, sdkContext),
+        () =>
+          withConfiguredGitExecutionContext(sdkContext?.signal, () =>
+            logic(input, appContext, sdkContext),
+          ),
         { ...appContext, toolName },
         input,
       );
@@ -398,6 +405,7 @@ export function createToolHandler<TInput, TOutput>(
     appContext: RequestContext,
     sdkContext: SdkContext,
   ): Promise<TOutput> => {
+    assertConfiguredGitExecutionPolicy();
     // Resolve dependencies using lazy singleton (passing context for initialization logging)
     const { storage, factory } = getDependencies(appContext);
 
