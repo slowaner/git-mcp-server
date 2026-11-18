@@ -28,6 +28,7 @@ process.stdin.on('data', (chunk: Buffer) => {
   }
 });
 
+const startedAt = Date.now();
 void superviseProcess({
   binaryPath: process.execPath,
   args: [helper, nonce],
@@ -41,19 +42,32 @@ void superviseProcess({
   signal: controller.signal,
 }).then(
   () => finish('SUCCESS'),
-  (error: unknown) => {
-    if (error instanceof GitExecutionError) {
-      finish(error.reason, error.message);
-    } else {
-      finish('OTHER');
-    }
-  },
+  (error: unknown) =>
+    finish(
+      error instanceof GitExecutionError ? error.reason : 'OTHER',
+      error instanceof GitExecutionError
+        ? error.message.slice(0, 256)
+        : undefined,
+      error instanceof GitExecutionError,
+    ),
 );
 
-function finish(reason: string, message?: string): void {
+function finish(
+  reason: string,
+  message?: string,
+  rejectedWithGitExecutionError = false,
+): void {
+  const finishedAt = Date.now();
   writeFileSync(
     path.join(directory!, 'driver-result.json'),
-    JSON.stringify({ nonce, reason, message }),
+    JSON.stringify({
+      nonce,
+      reason,
+      message,
+      rejectedWithGitExecutionError,
+      finishedAt,
+      finishedAfterStartMs: finishedAt - startedAt,
+    }),
     { flag: 'wx', mode: 0o600 },
   );
   process.exit(0);

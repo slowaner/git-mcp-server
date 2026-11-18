@@ -22,7 +22,10 @@ interface ExecutionState {
   closing: boolean;
 }
 
-function recordFailure(state: ExecutionState, error: GitExecutionError): void {
+function recordFailure(
+  state: ExecutionState,
+  error: GitExecutionError,
+): GitExecutionError {
   if (
     state.failure === undefined ||
     (error.reason === 'CLEANUP_FAILED' &&
@@ -30,6 +33,7 @@ function recordFailure(state: ExecutionState, error: GitExecutionError): void {
   ) {
     state.failure = error;
   }
+  return state.failure;
 }
 
 const executionContext = new AsyncLocalStorage<GitExecutionContext>();
@@ -157,6 +161,19 @@ export function getGitExecutionFailure(): GitExecutionError | undefined {
         )
       : undefined)
   );
+}
+
+/** Preserve authorization failures even if an operation catches an optional call. */
+export function recordGitExecutionFailure(
+  error: GitExecutionError,
+): GitExecutionError {
+  const state = getState();
+  if (state) {
+    const failure = recordFailure(state, error);
+    state.controller.abort();
+    return failure;
+  }
+  return error;
 }
 
 /** Observe all native calls, including forgotten promises, without retaining output. */

@@ -18,6 +18,10 @@
  */
 
 import { BaseGitProvider } from '../../core/BaseGitProvider.js';
+import {
+  repositoryRootsFromContext,
+  withRepositoryRoots,
+} from '../../core/configured-repository-policy.js';
 import type { IGitProvider } from '../../core/IGitProvider.js';
 import type {
   GitAddOptions,
@@ -126,7 +130,11 @@ export class CliGitProvider extends BaseGitProvider implements IGitProvider {
     assertConfiguredGitExecutionPolicy();
     return withConfiguredGitExecutionContext(
       context.signal,
-      operation,
+      () =>
+        withRepositoryRoots(
+          repositoryRootsFromContext(context.requestContext),
+          () => withRepositoryRoots(context.repositoryRoots, operation),
+        ),
       context.deadline,
     );
   }
@@ -163,28 +171,29 @@ export class CliGitProvider extends BaseGitProvider implements IGitProvider {
    */
   async healthCheck(context: GitOperationContext): Promise<boolean> {
     assertConfiguredGitExecutionPolicy();
-    try {
-      const { stdout } = await executeGitCommand(
-        ['--version'],
-        context.workingDirectory,
-        {
-          signal: context.signal,
-          deadline: context.deadline,
-          repositoryRoots: context.repositoryRoots,
-        },
-      );
-      return stdout.includes('git version');
-    } catch (error) {
-      if (isGitNotFoundError(error)) {
-        this.logOperationStart('healthCheck', context, {
-          error: 'Git binary not found',
-        });
+    return this.runOperation(context, async () => {
+      try {
+        const { stdout } = await executeGitCommand(
+          ['--version'],
+          context.workingDirectory,
+          {
+            signal: context.signal,
+            deadline: context.deadline,
+            repositoryRoots: context.repositoryRoots,
+          },
+        );
+        return stdout.includes('git version');
+      } catch (error) {
+        if (isGitNotFoundError(error)) {
+          this.logOperationStart('healthCheck', context, {
+            error: 'Git binary not found',
+          });
+          return false;
+        }
         return false;
       }
-      return false;
-    }
+    });
   }
-
   // ========================================================================
   // Repository Operations
   // ========================================================================

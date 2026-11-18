@@ -3,7 +3,8 @@
  * @module services/git/providers/cli/operations/core/init
  */
 
-import { mkdir } from 'node:fs/promises';
+import { getConfiguredRepositoryPolicy } from '../../../../core/configured-repository-policy.js';
+import { discoverRepository } from '../../../../core/repository-discovery.js';
 
 import type { RequestContext } from '@/utils/index.js';
 
@@ -27,6 +28,12 @@ export async function executeInit(
   ) => Promise<{ stdout: string; stderr: string }>,
 ): Promise<GitInitResult> {
   try {
+    const policy = getConfiguredRepositoryPolicy(context.repositoryRoots);
+    options = {
+      ...options,
+      path: policy.resolve(options.path, context.workingDirectory).path,
+    };
+    discoverRepository(policy, options.path, true);
     const args: string[] = [];
 
     if (options.bare) {
@@ -37,13 +44,12 @@ export async function executeInit(
     const initialBranch = options.initialBranch || 'main';
     args.push(`--initial-branch=${initialBranch}`);
 
-    // Ensure the target directory exists before spawning git
-    // (git init creates .git inside the dir, but posix_spawn fails if cwd doesn't exist)
-    // Errors here (EPERM, EROFS) are non-fatal — git init will report a clear error.
-    await mkdir(options.path, { recursive: true }).catch(() => {});
+    // Let Git create directories only after effective config authorization.
+    const parent = policy.resolve(options.path).existingParent;
+    args.push('--', options.path);
 
     const cmd = buildGitCommand({ command: 'init', args });
-    await execGit(cmd, options.path, context.requestContext);
+    await execGit(cmd, parent, context.requestContext);
 
     const result = {
       success: true,

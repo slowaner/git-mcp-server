@@ -9,6 +9,7 @@
 import type { StorageService } from '@/storage/core/StorageService.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { resolveGitPath } from './git-path-policy.js';
+import { repositoryRootsFromContext } from '@/services/git/core/configured-repository-policy.js';
 import { logger, type RequestContext } from '@/utils/index.js';
 
 /**
@@ -93,7 +94,9 @@ export async function resolveWorkingDirectory(
     });
   }
 
-  return resolveGitPath(workingDir);
+  return resolveGitPath(workingDir, {
+    repositoryRoots: repositoryRootsFromContext(appContext),
+  });
 }
 
 /**

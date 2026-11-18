@@ -3,16 +3,27 @@
  * @module services/git/providers/cli/utils/git-executor
  */
 import { existsSync, statSync } from 'node:fs';
+import path from 'node:path';
 
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
-import { mapGitError } from './error-mapper.js';
-import { buildGitEnv, validateGitArgs } from './command-builder.js';
-import { spawnGitCommand, type GitCommandResult } from './runtime-adapter.js';
+import { getConfiguredRepositoryPolicy } from '../../../core/configured-repository-policy.js';
+import { containsPath } from '../../../core/repository-capability.js';
+import {
+  authorizeGitCommand,
+  disableSubmoduleRecursion,
+} from '../../../core/repository-command-gate.js';
+import { validateGitArgs } from './command-builder.js';
 import {
   assertConfiguredGitExecutionPolicy,
   withConfiguredGitExecutionContext,
 } from './configured-execution-policy.js';
-import { getGitExecutionFailure } from './execution-context.js';
+import {
+  getGitExecutionFailure,
+  recordGitExecutionFailure,
+} from './execution-context.js';
+import { mapGitError } from './error-mapper.js';
+import { GitExecutionError } from './execution-errors.js';
+import { spawnGitCommand, type GitCommandResult } from './runtime-adapter.js';
 
 /** Internal provider options; repository roots are issued by server authorization. */
 export interface ExecuteGitOptions {
@@ -36,7 +47,42 @@ export async function executeGitCommand(
     options.signal,
     async () => {
       try {
+        args = disableSubmoduleRecursion(args);
         validateGitArgs(args);
+        const roots = getConfiguredRepositoryPolicy(options.repositoryRoots);
+        cwd = roots.resolve(cwd).path;
+        const allowedRoots = roots.roots;
+        const ceilingDirectories =
+          allowedRoots &&
+          [
+            ...new Set(
+              allowedRoots
+                .filter(
+                  (root) =>
+                    !allowedRoots.some(
+                      (other) => other !== root && containsPath(other, root),
+                    ),
+                )
+                .map((root) => path.dirname(root)),
+            ),
+          ].join(path.delimiter);
+        const spawnOptions = {
+          policy,
+          deadline: options.deadline,
+          ceilingDirectories,
+        };
+        // Private closure: all discovery uses the same controlled environment,
+        // execution lifetime, raw aggregate budget and strict UTF-8 decoder.
+        const introspect = (command: string[], directory: string) =>
+          spawnGitCommand(
+            command,
+            directory,
+            process.env,
+            undefined,
+            options.signal,
+            true,
+            spawnOptions,
+          );
         if (!existsSync(cwd)) {
           throw new McpError(
             JsonRpcErrorCode.InvalidRequest,
@@ -49,16 +95,25 @@ export async function executeGitCommand(
             'Working directory is not a directory.',
           );
         }
+        cwd = await authorizeGitCommand(roots, args, cwd, introspect);
         return await spawnGitCommand(
           args,
           cwd,
-          buildGitEnv(process.env, policy),
+          process.env,
           undefined,
           options.signal,
           options.allowNonZeroExit,
-          { policy, deadline: options.deadline },
+          spawnOptions,
         );
       } catch (error) {
+        if (
+          error instanceof McpError &&
+          error.code === JsonRpcErrorCode.Forbidden
+        ) {
+          throw recordGitExecutionFailure(
+            new GitExecutionError('REPOSITORY_BOUNDARY', error.message),
+          );
+        }
         throw mapGitError(error, args[0] || 'unknown');
       }
     },

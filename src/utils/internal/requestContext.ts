@@ -46,6 +46,9 @@ export interface RequestContext {
    */
   tenantId?: string;
 
+  /** Server-issued repository restriction, intersected with the operator ceiling. */
+  readonly repositoryRoots?: readonly string[];
+
   /**
    * Optional authentication context, present if the request was authenticated.
    */

@@ -113,6 +113,23 @@ describe('GIT_BASE_DIR comma-separated roots', () => {
     ]);
   });
 
+  it.each(['/', '//', '/./', '/test/..', '/test/repos, /'])(
+    'rejects a filesystem root in GIT_BASE_DIR: %s',
+    (value) => {
+      process.env.GIT_BASE_DIR = value;
+      expect(() => parseConfig()).toThrow(
+        expect.objectContaining({
+          code: JsonRpcErrorCode.ConfigurationError,
+          data: {
+            validationErrors: {
+              git: ['GIT_BASE_DIR must not include a filesystem root'],
+            },
+          },
+        }),
+      );
+    },
+  );
+
   for (const value of [
     '',
     '   ',

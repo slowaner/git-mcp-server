@@ -4,6 +4,7 @@
  */
 
 import type { RequestContext } from '@/utils/index.js';
+import { getConfiguredRepositoryPolicy } from '../../../../core/configured-repository-policy.js';
 
 import type {
   GitOperationContext,
@@ -30,6 +31,19 @@ export async function executeWorktree(
   ) => Promise<{ stdout: string; stderr: string }>,
 ): Promise<GitWorktreeResult> {
   try {
+    const policy = getConfiguredRepositoryPolicy(context.repositoryRoots);
+    options = {
+      ...options,
+      ...(options.path !== undefined
+        ? { path: policy.resolve(options.path, context.workingDirectory).path }
+        : {}),
+      ...(options.newPath !== undefined
+        ? {
+            newPath: policy.resolve(options.newPath, context.workingDirectory)
+              .path,
+          }
+        : {}),
+    };
     const args: string[] = [options.mode];
 
     switch (options.mode) {
@@ -125,7 +139,7 @@ export async function executeWorktree(
           args.push('--force');
         }
 
-        args.push(options.path);
+        args.push('--', options.path);
 
         if (options.commitish) {
           args.push(options.commitish);
@@ -151,7 +165,7 @@ export async function executeWorktree(
           args.push('--force');
         }
 
-        args.push(options.path);
+        args.push('--', options.path);
 
         const cmd = buildGitCommand({ command: 'worktree', args });
         await execGit(cmd, context.workingDirectory, context.requestContext);
@@ -169,7 +183,7 @@ export async function executeWorktree(
           throw new Error('Path and new path are required for move operation');
         }
 
-        args.push(options.path, options.newPath);
+        args.push('--', options.path, options.newPath);
 
         const cmd = buildGitCommand({ command: 'worktree', args });
         await execGit(cmd, context.workingDirectory, context.requestContext);

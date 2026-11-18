@@ -99,7 +99,10 @@ describe('source-built STDIO runtime policy', { timeout: 20000 }, () => {
       arguments: { path: destination },
     });
     assert.equal(result.isError, true);
-    assert.match(JSON.stringify(result.content), /escape the defined root/);
+    assert.match(
+      JSON.stringify(result.content),
+      /Repository boundary denied:.*escapes configured roots/,
+    );
     await assert.rejects(stat(destination), { code: 'ENOENT' });
   });
   it('built server rejects invalid blob output without formatting a success', async () => {

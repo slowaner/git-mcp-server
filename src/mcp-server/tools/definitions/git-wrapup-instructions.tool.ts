@@ -5,6 +5,8 @@
 import { readFileSync } from 'fs';
 import path from 'path';
 import { z } from 'zod';
+import { resolveGitPath } from '../utils/git-path-policy.js';
+import { repositoryRootsFromContext } from '@/services/git/core/configured-repository-policy.js';
 
 import { logger } from '@/utils/index.js';
 import type { ToolDefinition } from '../utils/toolDefinition.js';
@@ -183,7 +185,13 @@ async function gitWrapupInstructionsLogic(
   }
 
   const { snapshot, warnings } = await gatherRepoSnapshot(
-    { provider, appContext, workingDirectory: workingDir },
+    {
+      provider,
+      appContext,
+      workingDirectory: await resolveGitPath(workingDir, {
+        repositoryRoots: repositoryRootsFromContext(appContext),
+      }),
+    },
     { commitLimit: 2, tagLimit: 2 },
   );
 

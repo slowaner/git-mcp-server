@@ -363,6 +363,9 @@ const ConfigSchema = z.object({
           .transform((roots) => [
             ...new Set(roots.map((root) => path.resolve(root))),
           ])
+          .refine((roots) => roots.every((root) => path.dirname(root) !== root), {
+            message: 'GIT_BASE_DIR must not include a filesystem root',
+          })
           .optional(),
       ),
       maxCommandTimeoutMs: z.coerce
