@@ -25,7 +25,9 @@ describe('Configuration Service', () => {
     // Unset variables to ensure defaults are tested
     delete process.env.NODE_ENV;
     delete process.env.STORAGE_PROVIDER_TYPE;
+    delete process.env.GIT_MAX_COMMAND_TIMEOUT_MS;
     const config = parseConfig();
+    expect(config.git.maxCommandTimeoutMs).toBe(60000);
     expect(config.environment).toBe('development');
     expect(config.logLevel).toBe('debug');
     expect(config.mcpHttpPort).toBe(3015);
