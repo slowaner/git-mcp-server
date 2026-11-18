@@ -113,8 +113,7 @@ git-mcp-server
 │   │   │   │   │   └── withAuth.ts
 │   │   │   │   ├── strategies
 │   │   │   │   │   ├── authStrategy.ts
-│   │   │   │   │   ├── jwtStrategy.ts
-│   │   │   │   │   └── oauthStrategy.ts
+│   │   │   │   │   └── jwtStrategy.ts
 │   │   │   │   ├── authFactory.ts
 │   │   │   │   ├── authMiddleware.ts
 │   │   │   │   └── index.ts
@@ -195,11 +194,8 @@ git-mcp-server
 │   │   ├── providers
 │   │   │   ├── fileSystem
 │   │   │   │   └── fileSystemProvider.ts
-│   │   │   ├── inMemory
-│   │   │   │   └── inMemoryProvider.ts
-│   │   │   └── supabase
-│   │   │       ├── supabase.types.ts
-│   │   │       └── supabaseProvider.ts
+│   │   │   └── inMemory
+│   │   │       └── inMemoryProvider.ts
 │   │   └── index.ts
 │   ├── types-global
 │   │   └── errors.ts

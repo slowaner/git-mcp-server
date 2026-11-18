@@ -198,24 +198,7 @@ export function createHttpApp(
   // Health check — unprotected
   app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
-  // RFC 9728 Protected Resource Metadata endpoint (MCP 2025-06-18)
-  // Must be accessible without authentication for discovery
-  app.get('/.well-known/oauth-protected-resource', (c) => {
-    if (!config.oauthIssuerUrl) {
-      return c.json(
-        { error: 'OAuth not configured on this server' },
-        { status: 404 },
-      );
-    }
 
-    return c.json({
-      resource: config.mcpServerResourceIdentifier || config.oauthAudience,
-      authorization_servers: [config.oauthIssuerUrl],
-      bearer_methods_supported: ['header'],
-      resource_signing_alg_values_supported: ['RS256', 'ES256', 'PS256'],
-      ...(config.oauthJwksUri && { jwks_uri: config.oauthJwksUri }),
-    });
-  });
 
   // Create auth strategy and middleware if auth is enabled
   const authStrategy = createAuthStrategy();

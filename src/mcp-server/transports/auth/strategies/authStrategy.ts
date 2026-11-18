@@ -1,8 +1,6 @@
 /**
  * @fileoverview Defines the interface for all authentication strategies.
- * This interface establishes a contract for verifying authentication tokens,
- * ensuring that any authentication method (JWT, OAuth, etc.) can be used
- * interchangeably by the core authentication middleware.
+ * The core authentication middleware uses this interface to verify tokens.
  * @module src/mcp-server/transports/auth/strategies/AuthStrategy
  */
 import type { AuthInfo } from '@/mcp-server/transports/auth/lib/authTypes.js';

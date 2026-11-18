@@ -54,9 +54,9 @@ This document defines the operational rules for contributing to this codebase. F
 | `src/mcp-server/resources/definitions/` | MCP Resource definitions. Primary: `git-working-directory.resource.ts`.                                                                  |
 | `src/mcp-server/resources/utils/`       | Shared resource utilities: `ResourceDefinition` and handler factory.                                                                     |
 | `src/mcp-server/prompts/definitions/`   | MCP Prompt definitions (e.g., `git-wrapup.prompt.ts`).                                                                                   |
-| `src/mcp-server/transports/`            | Transport implementations: `http/` (Hono + Streamable HTTP), `stdio/`, `auth/` (JWT/OAuth strategies).                                   |
+| `src/mcp-server/transports/`            | Transport implementations: `http/` (Hono + Streamable HTTP), `stdio/`, `auth/` (local JWT).                                              |
 | `src/services/git/`                     | Git service: `core/` (interfaces, factory), `providers/cli/` (CLI implementation with domain-organized operations).                      |
-| `src/storage/`                          | Storage abstractions and providers (in-memory, filesystem, supabase).                                                                    |
+| `src/storage/`                          | Storage abstractions and providers (in-memory and filesystem).                                                                           |
 | `src/container/`                        | Dependency injection (`tsyringe`). Service registration and tokens.                                                                      |
 | `src/utils/`                            | Global utilities: `internal/` (logger, requestContext, ErrorHandler, performance), `security/` (sanitization), `telemetry/`, `metrics/`. |
 | `tests/`                                | Unit/integration tests mirroring `src/` structure.                                                                                       |
@@ -440,9 +440,8 @@ Resources follow the same pattern as tools with a declarative `ResourceDefinitio
 
 ### HTTP Transport
 
-- **Modes:** `MCP_AUTH_MODE` = `'none'` | `'jwt'` | `'oauth'`
+- **Modes:** `MCP_AUTH_MODE` accepts `none` or `jwt`. HTTP listens only on `127.0.0.1`.
 - **JWT mode:** Uses `MCP_AUTH_SECRET_KEY`. In dev without the secret, verification is bypassed.
-- **OAuth mode:** Verifies tokens via remote JWKS. Requires `OAUTH_ISSUER_URL` and `OAUTH_AUDIENCE`.
 - **Extracted claims:** `clientId`, `scopes`, `subject`, `tenantId` (from `'tid'` claim).
 - **Scope enforcement:** Always wrap logic with `withToolAuth` or `withResourceAuth`. Defaults to allowed when auth is disabled.
 
@@ -453,8 +452,7 @@ No HTTP-based auth. Authorization handled by the host application.
 ### HTTP Endpoints
 
 - `GET /healthz` — Unprotected health check
-- `GET /.well-known/oauth-protected-resource` — RFC 9728 protected resource metadata (unprotected, for discovery)
-- `GET /mcp` — Unprotected server identity and config summary
+- `GET /mcp` — Streamable HTTP event stream (protected when auth is enabled).
 - `POST /mcp` — JSON-RPC transport (protected when auth enabled)
 - `DELETE /mcp` — Session termination (MCP Spec 2025-06-18)
 - CORS enabled via `MCP_ALLOWED_ORIGINS` or `'*'` fallback
@@ -500,8 +498,8 @@ All configuration validated via Zod in `src/config/index.ts`. Derives `serviceNa
 | Category      | Variables                                                                                                                                                                                                                                                  |
 | :------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Transport** | `MCP_TRANSPORT_TYPE` (`stdio`/`http`), `MCP_HTTP_PORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PATH`                                                                                                                                                                   |
-| **Auth**      | `MCP_AUTH_MODE` (`none`/`jwt`/`oauth`), `MCP_AUTH_SECRET_KEY`, `OAUTH_ISSUER_URL`, `OAUTH_AUDIENCE`, `OAUTH_JWKS_URI`                                                                                                                                      |
-| **Storage**   | `STORAGE_PROVIDER_TYPE` (`in-memory`/`filesystem`/`supabase`), `STORAGE_FILESYSTEM_PATH`                                                                                                                                                                   |
+| **Auth**      | `MCP_AUTH_MODE` (`none`/`jwt`), `MCP_AUTH_SECRET_KEY`                                                                                                                                                                                                      |
+| **Storage**   | `STORAGE_PROVIDER_TYPE` (`in-memory`/`filesystem`), `STORAGE_FILESYSTEM_PATH`                                                                                                                                                                              |
 | **Git**       | `GIT_PROVIDER` (`auto`/`cli`/`isomorphic`), `GIT_SIGN_COMMITS`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`, `GIT_BASE_DIR`, `GIT_MAX_COMMAND_TIMEOUT_MS`, `GIT_MAX_BUFFER_SIZE_MB`, `GIT_WRAPUP_INSTRUCTIONS_PATH` |
 | **Telemetry** | `OTEL_ENABLED`, `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`                                                                                                                                                                                                |
 

@@ -84,9 +84,15 @@ absolute path to select a repository under another entry, or use
 Roots limit the paths accepted by the server. Git and its helpers run with the
 operator's OS permissions.
 
-For local Streamable HTTP, set `MCP_TRANSPORT_TYPE=http`,
-`MCP_HTTP_HOST=127.0.0.1`, and `MCP_HTTP_PORT=3015` in the server environment.
-The same directory rules apply.
+For local Streamable HTTP, set `MCP_TRANSPORT_TYPE=http` and connect to
+`http://127.0.0.1:3015/mcp`. The server listens only on `127.0.0.1`. Use
+`MCP_HTTP_PORT` to choose another port. The same directory rules apply.
+
+To authenticate HTTP requests with a locally signed token, set
+`MCP_AUTH_MODE=jwt` and supply a random `MCP_AUTH_SECRET_KEY`. Send the token
+as `Authorization: Bearer <token>`. Include a client ID and the scopes needed
+by your tools, such as `tool:git:read` for `git_status`.
+
 See the [native Git execution policy](docs/security/git-execution.md) for
 platform support and environment configuration.
 
@@ -98,8 +104,8 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 | :--------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Declarative tools            | Define capabilities in single, self-contained files. The framework handles registration, validation, and execution.                                                                                                               |
 | Error handling               | Unified `McpError` system for consistent, structured error responses.                                                                                                                                                             |
-| Authentication               | Supports `none`, `jwt`, and `oauth` modes.                                                                                                                                                                                        |
-| Pluggable storage            | Swap backends (`in-memory`, `filesystem`, `Supabase`) without changing business logic.                                                                                                                                            |
+| Authentication               | Supports anonymous HTTP (`none`) and locally verified JWTs (`jwt`).                                                                                                                                                               |
+| Pluggable storage            | Store state in memory (`in-memory`) or on disk (`filesystem`).                                                                                                                                                                    |
 | Observability                | Local structured logging with Pino.                                                                                                                                                                                               |
 | Dependency injection         | Built with `tsyringe` for decoupled, testable architecture.                                                                                                                                                                       |
 | Cross-runtime                | Auto-detects Bun or Node.js and uses the appropriate process spawning method.                                                                                                                                                     |
@@ -114,7 +120,7 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 - All file paths are validated and sanitized to prevent directory traversal.
 - Optional `GIT_BASE_DIR` restricts Git paths and repository metadata to one or more explicitly allowed directory trees.
 - Git commands use validated arguments via process spawning — no shell interpolation.
-- JWT and OAuth support for authenticated deployments.
+- Local JWT verification and scope checks in `jwt` mode.
 - Optional rate limiting via the DI-managed `RateLimiter` service.
 - All operations are logged with request context for auditing.
 
@@ -141,18 +147,18 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 | `MCP_RESPONSE_FORMAT`          | Response format: `json` (LLM-optimized), `markdown` (human-readable), or `auto`.                                                                                                                             | `json`      |
 | `MCP_RESPONSE_VERBOSITY`       | Detail level: `minimal`, `standard`, or `full`.                                                                                                                                                              | `standard`  |
 | `MCP_HTTP_PORT`                | HTTP server port.                                                                                                                                                                                            | `3015`      |
-| `MCP_HTTP_HOST`                | HTTP server hostname.                                                                                                                                                                                        | `127.0.0.1` |
+| `MCP_HTTP_HOST`                | HTTP listen address. Accepts only `127.0.0.1`.                                                                                                                                                               | `127.0.0.1` |
 | `MCP_HTTP_ENDPOINT_PATH`       | MCP request endpoint path.                                                                                                                                                                                   | `/mcp`      |
-| `MCP_AUTH_MODE`                | Authentication mode: `none`, `jwt`, or `oauth`.                                                                                                                                                              | `none`      |
-| `STORAGE_PROVIDER_TYPE`        | Storage backend: `in-memory`, `filesystem`, `supabase`.                                                                                                                                                      | `in-memory` |
+| `MCP_AUTH_MODE`                | HTTP authentication mode: `none` or `jwt`.                                                                                                                                                                   | `none`      |
+| `STORAGE_PROVIDER_TYPE`        | Storage backend: `in-memory` or `filesystem`.                                                                                                                                                                | `in-memory` |
 | `MCP_LOG_LEVEL`                | Minimum log level: `debug`, `info`, `warn`, `error`.                                                                                                                                                         | `info`      |
 | `GIT_SIGN_COMMITS`             | Explicit signing for commits, tags, merges, rebases, cherry-picks, and pulls; `false` defers to native Git config. Only commit/tag retries remove the explicit signing flag (see `signed`/`signingWarning`). | `true`      |
 | `GIT_AUTHOR_NAME`              | Git author name. Aliases: `GIT_USERNAME`, `GIT_USER`. Falls back to global git config.                                                                                                                       | `(none)`    |
 | `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                                                                                   | `(none)`    |
 | `GIT_BASE_DIR`                 | Comma-separated absolute directories; the first anchors relative paths. Tilde expansion is supported. Filesystem roots and literal commas are disallowed.                                                        | `(none)`    |
 | `GIT_WRAPUP_INSTRUCTIONS_PATH` | Path to custom markdown file with workflow instructions.                                                                                                                                                     | `(none)`    |
-| `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ character secret key.                                                                                                                                                           | `(none)`    |
-| `OAUTH_ISSUER_URL`             | Required for `oauth` auth. OIDC provider URL.                                                                                                                                                                | `(none)`    |
+| `MCP_AUTH_SECRET_KEY`          | Shared JWT secret. Set a random secret of at least 32 bytes for `jwt` mode.                                                                                                                                  | `(none)`    |
+| `STORAGE_FILESYSTEM_PATH`      | Local storage directory when using `filesystem`.                                                                                                                                                             | `./.storage` |
 
 ## Running the server
 

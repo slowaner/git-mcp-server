@@ -52,7 +52,7 @@ Focus on packages this server directly depends on:
 | `hono` / `@hono/node-server` / `@hono/mcp` | HTTP transport API changes, middleware signatures                     |
 | `@opentelemetry/*`                         | Instrumentation API contract changes                                  |
 | `tsyringe` / `reflect-metadata`            | DI container behavior, decorator semantics                            |
-| `jose`                                     | JWT/JWKS verification API                                             |
+| `jose`                                     | Local JWT verification API                                             |
 | `pino` / `pino-pretty`                     | Logger API, transport config                                          |
 | `zod`                                      | Schema API (e.g., v3 → v4 refinement changes, `.describe()` behavior) |
 | `typescript`                               | New strict checks, lib changes affecting existing types               |
