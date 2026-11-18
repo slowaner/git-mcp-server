@@ -17,7 +17,6 @@ export default [
       'dist/',
       'build/',
       'node_modules/',
-      '**/.wrangler/',
       'old_tools/',
     ],
   },

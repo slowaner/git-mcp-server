@@ -2,8 +2,7 @@
  * @fileoverview Loads, validates, and exports application configuration.
  * This module centralizes configuration management, sourcing values from
  * environment variables. It uses Zod for schema validation to ensure type safety
- * and correctness of configuration parameters, and is designed to be
- * environment-agnostic (e.g., Node.js, Cloudflare Workers).
+ * and correctness of configuration parameters for the Node.js and Bun servers.
  *
  * @module src/config/index
  */
@@ -270,13 +269,7 @@ const ConfigSchema = z.object({
           }
           return str;
         },
-        z.enum([
-          'in-memory',
-          'filesystem',
-          'supabase',
-          'cloudflare-r2',
-          'cloudflare-kv',
-        ]),
+        z.enum(['in-memory', 'filesystem', 'supabase']),
       )
       .default('in-memory'),
     filesystemPath: z.preprocess(
@@ -385,7 +378,7 @@ const ConfigSchema = z.object({
         .int()
         .min(1)
         .max(2147483647)
-        .default(30000)
+        .default(60000)
         .describe('Total native Git operation deadline in milliseconds.'),
       maxBufferSizeMb: z.coerce
         .number()
@@ -438,27 +431,6 @@ const ConfigSchema = z.object({
     enabled: z.coerce.boolean().default(false),
     serviceName: z.string(),
     serviceVersion: z.string(),
-    tracesEndpoint: z.string().url().optional(),
-    metricsEndpoint: z.string().url().optional(),
-    samplingRatio: z.coerce.number().default(1.0),
-    logLevel: z
-      .preprocess(
-        (val) => {
-          const str = emptyStringAsUndefined(val);
-          if (typeof str === 'string') {
-            const lower = str.toLowerCase();
-            const aliasMap: Record<string, string> = {
-              err: 'ERROR',
-              warning: 'WARN',
-              information: 'INFO',
-            };
-            return aliasMap[lower] ?? str.toUpperCase();
-          }
-          return str;
-        },
-        z.enum(['NONE', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'VERBOSE', 'ALL']),
-      )
-      .default('INFO'),
   }),
 });
 
@@ -591,10 +563,6 @@ const parseConfig = () => {
       enabled: env.OTEL_ENABLED,
       serviceName: env.OTEL_SERVICE_NAME,
       serviceVersion: env.OTEL_SERVICE_VERSION,
-      tracesEndpoint: env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
-      metricsEndpoint: env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
-      samplingRatio: env.OTEL_TRACES_SAMPLER_ARG,
-      logLevel: env.OTEL_LOG_LEVEL,
     },
     // The following fields will be derived and are not directly from env
     mcpServerName: env.MCP_SERVER_NAME,

@@ -1,9 +1,7 @@
 /**
- * @fileoverview Barrel for telemetry utilities (instrumentation and semconv).
- * Importing `instrumentation` initializes OpenTelemetry when enabled.
+ * @fileoverview Trace context and semantic conventions.
  * @module src/utils/telemetry
  */
 
-export * from './instrumentation.js';
 export * from './semconv.js';
 export * from './trace.js';

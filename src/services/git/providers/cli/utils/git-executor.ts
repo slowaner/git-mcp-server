@@ -3,6 +3,7 @@
  * @module services/git/providers/cli/utils/git-executor
  */
 import { existsSync, statSync } from 'node:fs';
+
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { mapGitError } from './error-mapper.js';
 import { buildGitEnv, validateGitArgs } from './command-builder.js';
