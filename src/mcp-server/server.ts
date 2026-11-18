@@ -48,6 +48,7 @@ export async function createMcpServerInstance(): Promise<McpServer> {
       version: config.mcpServerVersion,
     },
     {
+      maxToolInputElements: config.toolInputLimits.maxElements,
       capabilities: {
         logging: {},
         resources: { listChanged: true },

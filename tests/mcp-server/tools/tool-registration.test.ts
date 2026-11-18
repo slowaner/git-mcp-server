@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { ToolRegistry } from '@/mcp-server/tools/tool-registration.js';
+import { config } from '@/config/index.js';
 import type { ToolDefinition } from '@/mcp-server/tools/utils/toolDefinition.js';
 import {
   JSON_SCHEMA_2020_12,
@@ -101,7 +102,15 @@ describe('ToolRegistry.registerAll', () => {
     const handler = setRequestHandler.mock.calls[0]![1] as RequestHandler;
     const result = handler() as ReturnType<typeof buildToolListing>;
 
-    expect(result).toEqual(buildToolListing(defs));
+    const expected = buildToolListing(defs);
+    for (const tool of expected.tools) {
+      const properties = tool.inputSchema.properties as Record<
+        string,
+        Record<string, unknown>
+      >;
+      properties.path!.maxLength = config.toolInputLimits.maxStringBytes;
+    }
+    expect(result).toEqual(expected);
     expect(result.tools.map((tool) => tool.name)).toEqual([
       'git_alpha',
       'git_beta',

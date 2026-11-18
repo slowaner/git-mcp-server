@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "module": "ESNext",
     // Override module resolution for tests to be less strict
     "moduleResolution": "Bundler", // Or "Node", depending on actual test runner needs
     "verbatimModuleSyntax": false,

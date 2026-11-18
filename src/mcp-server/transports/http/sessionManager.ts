@@ -73,7 +73,7 @@ export class SessionManager {
    * @param staleTimeoutMs - Session expiry timeout in milliseconds (default: 30 minutes)
    * @param cleanupIntervalMs - How often to run cleanup (default: 5 minutes)
    */
-  private constructor(
+  public constructor(
     staleTimeoutMs = 30 * 60 * 1000, // 30 minutes
     cleanupIntervalMs = 5 * 60 * 1000, // 5 minutes
   ) {
@@ -166,7 +166,7 @@ export class SessionManager {
     const age = now - session.lastActivityAt;
 
     // Session is stale if no activity within timeout window
-    if (age > this.staleTimeoutMs) {
+    if (age >= this.staleTimeoutMs) {
       logger.info('Session expired due to inactivity', {
         ...requestContextService.createRequestContext({
           operation: 'SessionManager.isSessionValid',
@@ -253,6 +253,7 @@ export class SessionManager {
     this.cleanupIntervalId = setInterval(() => {
       this.cleanupStaleSessions();
     }, this.cleanupIntervalMs);
+    this.cleanupIntervalId.unref?.();
 
     logger.info('Session cleanup interval started', {
       ...requestContextService.createRequestContext({
@@ -290,7 +291,7 @@ export class SessionManager {
 
     for (const [sessionId, metadata] of this.sessions.entries()) {
       const age = now - metadata.lastActivityAt;
-      if (age > this.staleTimeoutMs) {
+      if (age >= this.staleTimeoutMs) {
         this.sessions.delete(sessionId);
         this.onSessionExpired?.(sessionId);
         removedCount++;
@@ -314,7 +315,9 @@ export class SessionManager {
    */
   public clearAllSessions(): void {
     const count = this.sessions.size;
+    const ids = [...this.sessions.keys()];
     this.sessions.clear();
+    for (const id of ids) this.onSessionExpired?.(id);
     logger.warning('All sessions cleared', {
       ...requestContextService.createRequestContext({
         operation: 'SessionManager.clearAllSessions',
