@@ -90,7 +90,7 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 | Error handling               | Unified `McpError` system for consistent, structured error responses.                                                                                                                                                             |
 | Authentication               | Supports `none`, `jwt`, and `oauth` modes.                                                                                                                                                                                        |
 | Pluggable storage            | Swap backends (`in-memory`, `filesystem`, `Supabase`) without changing business logic.                                                                                                                                            |
-| Observability                | Structured logging (Pino) and optional auto-instrumented OpenTelemetry for traces and metrics.                                                                                                                                    |
+| Observability                | Local structured logging with Pino.                                                                                                                                                                                               |
 | Dependency injection         | Built with `tsyringe` for decoupled, testable architecture.                                                                                                                                                                       |
 | Cross-runtime                | Auto-detects Bun or Node.js and uses the appropriate process spawning method.                                                                                                                                                     |
 | Provider architecture        | Pluggable git provider system. Current: CLI. Planned: isomorphic-git for edge deployment.                                                                                                                                         |
@@ -120,6 +120,8 @@ without that explicit request, leaving native configuration active. The retry
 can still sign or fail. Commit/tag `signed` reports signature presence, not trust
 verification; `signingWarning` reports a retry.
 
+The standalone server writes logs locally and ignores legacy OTLP exporter settings.
+
 All configuration is validated at startup in `src/config/index.ts`. Key environment variables:
 
 | Variable                       | Description                                                                                                                                                                                                  | Default     |
@@ -133,7 +135,6 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 | `MCP_HTTP_ENDPOINT_PATH`       | MCP request endpoint path.                                                                                                                                                                                   | `/mcp`      |
 | `MCP_AUTH_MODE`                | Authentication mode: `none`, `jwt`, or `oauth`.                                                                                                                                                              | `none`      |
 | `STORAGE_PROVIDER_TYPE`        | Storage backend: `in-memory`, `filesystem`, `supabase`.                                                                                                                                                      | `in-memory` |
-| `OTEL_ENABLED`                 | Enable OpenTelemetry.                                                                                                                                                                                        | `false`     |
 | `MCP_LOG_LEVEL`                | Minimum log level: `debug`, `info`, `warn`, `error`.                                                                                                                                                         | `info`      |
 | `GIT_SIGN_COMMITS`             | Explicit signing for commits, tags, merges, rebases, cherry-picks, and pulls; `false` defers to native Git config. Only commit/tag retries remove the explicit signing flag (see `signed`/`signingWarning`). | `true`      |
 | `GIT_AUTHOR_NAME`              | Git author name. Aliases: `GIT_USERNAME`, `GIT_USER`. Falls back to global git config.                                                                                                                       | `(none)`    |

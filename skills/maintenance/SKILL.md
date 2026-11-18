@@ -50,7 +50,7 @@ Focus on packages this server directly depends on:
 | :----------------------------------------- | :-------------------------------------------------------------------- |
 | `@modelcontextprotocol/sdk`                | Protocol version bumps, breaking handler signatures, new capabilities |
 | `hono` / `@hono/node-server` / `@hono/mcp` | HTTP transport API changes, middleware signatures                     |
-| `@opentelemetry/*`                         | Instrumentation contract changes, exporter config                     |
+| `@opentelemetry/*`                         | Instrumentation API contract changes                                  |
 | `tsyringe` / `reflect-metadata`            | DI container behavior, decorator semantics                            |
 | `jose`                                     | JWT/JWKS verification API                                             |
 | `pino` / `pino-pretty`                     | Logger API, transport config                                          |
@@ -77,7 +77,7 @@ Common spots to re-check:
 
 - `src/services/git/providers/cli/` if child-process libraries changed
 - `src/mcp-server/transports/http/` if Hono / MCP SDK changed
-- `src/utils/telemetry/` if OpenTelemetry SDK changed
+- `src/utils/telemetry/` if trace context handling changed
 - `src/mcp-server/transports/auth/` if `jose` changed
 
 ### 5. Rebuild and verify

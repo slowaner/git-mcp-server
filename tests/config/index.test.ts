@@ -43,8 +43,6 @@ describe('config parsing', () => {
     process.env.STORAGE_PROVIDER_TYPE = 'fs';
     process.env.MCP_SESSION_MODE = ''; // exercise empty-string sanitization
     process.env.OTEL_ENABLED = 'true';
-    process.env.OTEL_LOG_LEVEL = 'warning';
-    process.env.OTEL_TRACES_SAMPLER_ARG = '0.5';
     delete process.env.LOGS_DIR;
 
     const parsed = parseConfig();
@@ -60,8 +58,6 @@ describe('config parsing', () => {
     expect(parsed.storage.providerType).toBe('filesystem');
     expect(parsed.logsPath).toBeUndefined();
     expect(parsed.openTelemetry.enabled).toBe(true);
-    expect(parsed.openTelemetry.logLevel).toBe('WARN');
-    expect(parsed.openTelemetry.samplingRatio).toBe(0.5);
   });
 
   it('throws a configuration error when validation fails', async () => {

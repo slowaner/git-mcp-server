@@ -1,8 +1,7 @@
 /**
  * @fileoverview Pino-backed singleton logger with environment-adaptive output.
- * Implements RFC5424 level mapping, structured context, automatic trace injection via
- * OpenTelemetry, and graceful shutdown. In a serverless environment (like Cloudflare
- * Workers), it uses a lightweight console-based logger.
+ * Implements RFC5424 level mapping, structured context, and graceful shutdown.
+ * In serverless environments it uses a lightweight console-based logger.
  * @module src/utils/internal/logger
  */
 import type { LevelWithSilent, Logger as PinoLogger } from 'pino';

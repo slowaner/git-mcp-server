@@ -64,8 +64,6 @@ describe('stdio multi-root paths', () => {
       MCP_LOG_LEVEL: 'error',
     };
     delete env.OTEL_ENABLED;
-    delete env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
-    delete env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
     git(['init', '-q', '-b', 'main'], repo);
     writeFileSync(join(repo, 'base.txt'), 'fixture\n');
     git(['add', 'base.txt'], repo);
