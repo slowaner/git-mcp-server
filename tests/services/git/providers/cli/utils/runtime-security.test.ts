@@ -3,6 +3,7 @@
  * @module tests/services/git/providers/cli/utils/runtime-security.test
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -404,7 +405,7 @@ describe('real process supervision', { timeout: 15000 }, () => {
       );
     }
   });
-  it('escalates past ignored SIGTERM after cancellation and removes listener', async () => {
+  it('escalates past ignored SIGTERM after cancellation', async () => {
     const controller = new AbortController();
     const source =
       "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync('ready',String(process.pid)); setInterval(()=>{},100)";
@@ -421,7 +422,23 @@ describe('real process supervision', { timeout: 15000 }, () => {
     assert.ok(pid > 0);
     controller.abort();
     await assert.rejects(task, reason('CANCELLED'));
-    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    // A killed orphan can remain in the process table until it is reaped.
+    const inspection = spawnSync(
+      '/bin/ps',
+      ['-o', 'stat=', '-p', String(pid)],
+      {
+        encoding: 'utf8',
+        timeout: 1000,
+      },
+    );
+    assert.equal(inspection.error, undefined);
+    assert.equal(inspection.stderr, '');
+    if (inspection.status === 1) {
+      assert.equal(inspection.stdout.trim(), '');
+    } else {
+      assert.equal(inspection.status, 0);
+      assert.match(inspection.stdout.trim(), /^[ZX]/);
+    }
   });
   it('honors the configured deadline instead of a fixed 60 seconds', async () => {
     const start = Date.now();
