@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { GitExecutionError } from '../../../../../../src/services/git/providers/cli/utils/execution-errors.js';
 import {
   getGitExecutionContext,
+  trackGitExecution,
   withGitExecutionContext,
 } from '../../../../../../src/services/git/providers/cli/utils/execution-context.js';
 import {
@@ -111,6 +112,37 @@ describe('Git execution policy', () => {
 });
 
 describe('request lifetime propagation', () => {
+  for (const [nativeReason, expectedReason] of [
+    ['CLEANUP_FAILED', 'CLEANUP_FAILED'],
+    ['CANCELLED', 'DEADLINE'],
+  ] as const) {
+    it(`reports ${expectedReason} when process cleanup returns ${nativeReason} after the request deadline`, async () => {
+      const startedAt = Date.now();
+      await assert.rejects(
+        withGitExecutionContext(
+          { startedAt, deadline: startedAt + 100 },
+          async () => {
+            const signal = getGitExecutionContext()?.signal;
+            assert.ok(signal);
+            return trackGitExecution(
+              new Promise<never>((_, reject) => {
+                signal.addEventListener(
+                  'abort',
+                  () =>
+                    reject(
+                      new GitExecutionError(nativeReason, 'Test failure.'),
+                    ),
+                  { once: true },
+                );
+              }),
+            );
+          },
+        ),
+        reason(expectedReason),
+      );
+    });
+  }
+
   it('keeps concurrent SDK signal/deadline scopes independent across async boundaries', async () => {
     const a = new AbortController();
     const b = new AbortController();

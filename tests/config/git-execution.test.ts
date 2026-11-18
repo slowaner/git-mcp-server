@@ -30,7 +30,7 @@ describe('native Git execution configuration', () => {
     const git = parseConfig().git;
     expect(git.executionProfile).toBe('restricted');
     expect(git.binaryPath).toBe('/usr/bin/git');
-    expect(git.maxCommandTimeoutMs).toBe(30000);
+    expect(git.maxCommandTimeoutMs).toBe(60000);
     expect(git.maxOutputBytes).toBe(10 * 1024 * 1024);
     expect(git.maxStdoutBytes).toBe(git.maxOutputBytes);
     expect(git.maxStderrBytes).toBe(git.maxOutputBytes);

@@ -41,14 +41,19 @@ void superviseProcess({
   signal: controller.signal,
 }).then(
   () => finish('SUCCESS'),
-  (error: unknown) =>
-    finish(error instanceof GitExecutionError ? error.reason : 'OTHER'),
+  (error: unknown) => {
+    if (error instanceof GitExecutionError) {
+      finish(error.reason, error.message);
+    } else {
+      finish('OTHER');
+    }
+  },
 );
 
-function finish(reason: string): void {
+function finish(reason: string, message?: string): void {
   writeFileSync(
     path.join(directory!, 'driver-result.json'),
-    JSON.stringify({ nonce, reason }),
+    JSON.stringify({ nonce, reason, message }),
     { flag: 'wx', mode: 0o600 },
   );
   process.exit(0);

@@ -19,9 +19,10 @@ enable `trusted` to host malicious or tenant-controlled repositories. Native
 global/system configuration and their includes, repository hooks/filters/helpers,
 SSH agent and signing keyring remain operator authority. Trusted mode makes no
 filesystem, RCE, network-egress or parent-path race confinement guarantee.
-Application canonical-root and tenant authorization checks still apply; selecting
-trusted mode does not grant a root/tenant exemption. Repository metadata and
-effective configuration authorization are separate gates in the remediation stack.
+The server continues to check paths against its configured root allowlist.
+Trusted mode applies across those roots and their repositories. Canonical
+repository metadata and effective configuration authorization are separate gates
+in the remediation stack.
 
 Existing installations must explicitly opt in only after establishing operator
 trust. Example for a POSIX installation whose Git is `/usr/bin/git`:
@@ -65,7 +66,7 @@ signing and hooks remain enabled according to that controlled native environment
 
 | Variable | Default | Valid bounds |
 | --- | --- | --- |
-| `GIT_MAX_COMMAND_TIMEOUT_MS` | 30000 | Integer 1..2147483647 |
+| `GIT_MAX_COMMAND_TIMEOUT_MS` | 60000 | Integer 1..2147483647 |
 | `GIT_MAX_BUFFER_SIZE_MB` | 10 | Integer 1..128; legacy aggregate MiB fallback |
 | `GIT_MAX_OUTPUT_BYTES` | Legacy MiB setting in bytes | Integer 1..134217728 |
 | `GIT_MAX_STDOUT_BYTES` | Aggregate byte cap | Integer 1..134217728 per process |
@@ -96,7 +97,8 @@ A fixed bundled bootstrap anchors a POSIX process group, uses a bounded private
 control descriptor not inherited by Git, and reports Git's real exit separately.
 Termination escalates from TERM to one final KILL while the anchor is live;
 settlement waits for stream/group cleanup. Permission failures and unexpected
-anchor loss are `CLEANUP_FAILED`, never success. The anchor is never signaled after
+anchor loss are `CLEANUP_FAILED`. This failure takes precedence over an earlier
+deadline or cancellation. The anchor is never signaled after
 exit or by a reused/unrelated PGID. A deliberately detached session escapes a
 process group; trusted programs must not detach. Group supervision is not a
 replacement for the missing restricted OS sandbox.

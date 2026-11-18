@@ -55,8 +55,10 @@ Works with both Bun and Node.js. Runtime is auto-detected.
 
 ### MCP client configuration
 
-Add the following to your MCP client config (e.g., `cline_mcp_settings.json`). Update the environment variables to match
-your setup — especially the git identity fields.
+Add the following to your MCP client config (e.g., `cline_mcp_settings.json`).
+Set `GIT_EXECUTION_PROFILE=trusted` only for repositories and Git configuration
+you trust to run with your account permissions. The default `restricted`
+profile rejects native Git operations.
 
 ```json
 {
@@ -68,11 +70,8 @@ your setup — especially the git identity fields.
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_LOG_LEVEL": "info",
-        "GIT_BASE_DIR": "~/Developer/",
-        "LOGS_DIR": "~/Developer/logs/git-mcp-server/",
-        "GIT_USERNAME": "cyanheads",
-        "GIT_EMAIL": "casey@caseyjhand.com",
-        "GIT_SIGN_COMMITS": "true"
+        "GIT_EXECUTION_PROFILE": "trusted",
+        "GIT_BASE_DIR": "~/repos,~/projects"
       }
     }
   }
@@ -81,7 +80,17 @@ your setup — especially the git identity fields.
 
 Bun users: replace `"command": "npx"` with `"command": "bunx"`.
 
-For Streamable HTTP, set `MCP_TRANSPORT_TYPE=http` and `MCP_HTTP_PORT=3015`.
+The first `GIT_BASE_DIR` entry anchors relative repository paths. Use an
+absolute path to select a repository under another entry, or use
+`git_set_working_dir` and then pass `.` for the session directory. The execution
+profile applies to all roots. Roots limit the paths accepted by the server.
+Git and its helpers run with the operator's OS permissions.
+
+For local Streamable HTTP, set `MCP_TRANSPORT_TYPE=http`,
+`MCP_HTTP_HOST=127.0.0.1`, and `MCP_HTTP_PORT=3015` in the server environment.
+The same Git execution profile and directory rules apply.
+See the [native Git execution policy](docs/security/git-execution.md) for
+platform support and environment configuration.
 
 ## Features
 
@@ -139,6 +148,7 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 | `MCP_AUTH_MODE`                | Authentication mode: `none`, `jwt`, or `oauth`.                                                                                                                                                              | `none`      |
 | `STORAGE_PROVIDER_TYPE`        | Storage backend: `in-memory`, `filesystem`, `supabase`.                                                                                                                                                      | `in-memory` |
 | `MCP_LOG_LEVEL`                | Minimum log level: `debug`, `info`, `warn`, `error`.                                                                                                                                                         | `info`      |
+| `GIT_EXECUTION_PROFILE` | Native Git execution policy. Use `trusted` on macOS or Linux for operator-trusted repositories. | `restricted` |
 | `GIT_SIGN_COMMITS`             | Explicit signing for commits, tags, merges, rebases, cherry-picks, and pulls; `false` defers to native Git config. Only commit/tag retries remove the explicit signing flag (see `signed`/`signingWarning`). | `true`      |
 | `GIT_AUTHOR_NAME`              | Git author name. Aliases: `GIT_USERNAME`, `GIT_USER`. Falls back to global git config.                                                                                                                       | `(none)`    |
 | `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                                                                                   | `(none)`    |
@@ -155,7 +165,9 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 npx @cyanheads/git-mcp-server@latest
 ```
 
-Configure through environment variables or your MCP client config.
+Provide configuration through inherited environment variables or your MCP client
+config. The server does not load a `.env` file. When using native Bun, launch
+from a trusted directory and follow the [Bun startup guidance](docs/security/git-execution.md#profiles-and-upgrade-behavior).
 
 ### Local development
 

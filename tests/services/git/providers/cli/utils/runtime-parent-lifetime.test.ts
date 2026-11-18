@@ -389,12 +389,31 @@ describe('qualified parent-lifetime fixtures', { timeout: 60000 }, () => {
       const result = (await waitFor(
         () => jsonIfPresent(path.join(driver.directory, 'driver-result.json')),
         6000,
-      )) as { reason: string };
-      assert.equal(result.reason, 'CLEANUP_FAILED');
+      )) as { nonce: string; reason: string; message?: string };
+      assert.equal(result.nonce, driver.nonce);
       const guard = (await jsonIfPresent(
         path.join(driver.directory, 'guard-fired.json'),
-      )) as { nonce: string };
+      )) as { nonce: string; anchor: number; at: number };
+      assert.ok(driver.ready);
       assert.equal(guard.nonce, driver.nonce);
+      assert.equal(guard.anchor, driver.ready.anchor);
+      assert.ok(guard.at >= driver.ready.hardStopAt);
+      assert.equal(
+        await jsonIfPresent(path.join(driver.directory, 'guard-error')),
+        undefined,
+      );
+
+      // The hardstop terminates Git and its anchor together. Either exit
+      // notification can be the first observed failure.
+      if (result.reason === 'SIGNAL_EXIT') {
+        assert.equal(result.message, 'Git command terminated by signal.');
+      } else {
+        assert.equal(result.reason, 'CLEANUP_FAILED');
+        assert.equal(
+          result.message,
+          'Git group anchor exited before supervised termination.',
+        );
+      }
       await quiescent(driver, 1000);
     });
   };

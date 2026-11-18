@@ -22,6 +22,16 @@ interface ExecutionState {
   closing: boolean;
 }
 
+function recordFailure(state: ExecutionState, error: GitExecutionError): void {
+  if (
+    state.failure === undefined ||
+    (error.reason === 'CLEANUP_FAILED' &&
+      state.failure.reason !== 'CLEANUP_FAILED')
+  ) {
+    state.failure = error;
+  }
+}
+
 const executionContext = new AsyncLocalStorage<GitExecutionContext>();
 const executionStates = new WeakMap<GitExecutionContext, ExecutionState>();
 
@@ -95,16 +105,21 @@ export async function withGitExecutionContext<T>(
         );
       state.closing = true;
       if (state.pending.size > 0) {
-        if (outcome.ok)
-          state.failure ??= new GitExecutionError(
-            'CLEANUP_FAILED',
-            'Git operation returned with active processes.',
+        if (outcome.ok) {
+          recordFailure(
+            state,
+            new GitExecutionError(
+              'CLEANUP_FAILED',
+              'Git operation returned with active processes.',
+            ),
           );
+        }
         controller.abort();
         await Promise.allSettled([...state.pending]);
       }
       if (state.failure) throw state.failure;
       state.budget?.assertActive();
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- Preserve the operation's original rejection.
       if (!outcome.ok) throw outcome.error;
       if (controller.signal.aborted)
         throw new GitExecutionError('CANCELLED', 'Git request cancelled.');
@@ -133,7 +148,7 @@ export function getGitOutputBudget(limit: number): GitOutputBudget {
   return state.budget;
 }
 
-/** Reject late calls after a request ended, and preserve its first control failure. */
+/** Reject late calls and report the first control failure, with cleanup taking priority. */
 export function getGitExecutionFailure(): GitExecutionError | undefined {
   const state = getState();
   return (
@@ -155,7 +170,7 @@ export function trackGitExecution<T>(promise: Promise<T>): Promise<T> {
   state.pending.add(tracked);
   void tracked.catch((error: unknown) => {
     if (error instanceof GitExecutionError) {
-      state.failure ??= error;
+      recordFailure(state, error);
       state.controller.abort();
     }
   });
