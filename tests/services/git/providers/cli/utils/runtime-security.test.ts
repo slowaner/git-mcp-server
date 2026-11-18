@@ -3,13 +3,14 @@
  * @module tests/services/git/providers/cli/utils/runtime-security.test
  */
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { ChildProcess, spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { GitExecutionError } from '../../../../../../src/services/git/providers/cli/utils/execution-errors.js';
+import { GIT_PROCESS_HOST_SOURCE } from '../../../../../../src/services/git/providers/cli/utils/process-host.js';
 import {
   getGitExecutionContext,
   trackGitExecution,
@@ -345,6 +346,44 @@ describe('real process supervision', { timeout: 15000 }, () => {
     await assert.rejects(task, reason('CANCELLED'));
     await assert.rejects(readFile(path.join(directory, 'spawned')));
   });
+  for (const stream of ['stdout', 'stderr'] as const) {
+    it(`reports a ${stream} failure during cancellation as CLEANUP_FAILED`, async () => {
+      const controller = new AbortController();
+      const emit = ChildProcess.prototype.emit;
+      ChildProcess.prototype.emit = function (
+        this: ChildProcess,
+        event: string | symbol,
+        ...args: unknown[]
+      ): boolean {
+        const emitted = Reflect.apply(emit, this, [event, ...args]) as boolean;
+        if (
+          event === 'spawn' &&
+          this.spawnargs.includes(GIT_PROCESS_HOST_SOURCE)
+        ) {
+          ChildProcess.prototype.emit = emit;
+          controller.abort();
+          this[stream]?.emit(
+            'error',
+            new Error('Simulated output pipe failure.'),
+          );
+        }
+        return emitted;
+      };
+      try {
+        await assert.rejects(
+          run('', { signal: controller.signal }),
+          (error: unknown) => {
+            assert.ok(error instanceof GitExecutionError);
+            assert.equal(error.reason, 'CLEANUP_FAILED');
+            assert.equal(error.message, `Git ${stream} stream failed.`);
+            return true;
+          },
+        );
+      } finally {
+        ChildProcess.prototype.emit = emit;
+      }
+    });
+  }
   it('does not let Git forge its private host exit protocol through fd3', async () => {
     const source =
       "try { require('node:fs').writeSync(3, JSON.stringify({type:'exit',code:0,signal:null})+'\\n'); } catch {} process.exitCode=7;";

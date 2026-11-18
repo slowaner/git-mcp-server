@@ -320,7 +320,7 @@ const ConfigSchema = z.object({
               'Every trusted helper PATH directory must be absolute.',
             ),
         )
-        .describe('Explicit helper search path for the trusted Git profile.'),
+        .describe('Search path for native Git helper programs.'),
       provider: z.preprocess(
         emptyStringAsUndefined,
         z.enum(['auto', 'cli', 'isomorphic']).default('auto'),
