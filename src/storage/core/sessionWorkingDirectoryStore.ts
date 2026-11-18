@@ -31,15 +31,22 @@ export class SessionWorkingDirectoryWrites {
     return this.enqueue('write', write);
   }
 
-  clear<T>(remove: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    return this.enqueue('clear', remove);
+  clear<T>(
+    remove: (signal: AbortSignal) => Promise<T>,
+    requestSignal?: AbortSignal,
+  ): Promise<T> {
+    return this.enqueue('clear', remove, requestSignal);
   }
 
   private enqueue<T>(
     operation: 'write' | 'clear',
     mutate: (signal: AbortSignal) => Promise<T>,
+    requestSignal?: AbortSignal,
   ): Promise<T> {
-    const pending = this.settled.then(() => this.execute(operation, mutate));
+    const pending = this.settled.then(() => {
+      requestSignal?.throwIfAborted();
+      return this.execute(operation, mutate);
+    });
     this.settled = pending.catch(() => {});
     return pending;
   }
@@ -196,13 +203,17 @@ export class SessionWorkingDirectoryStore {
   /** Reauthorize the previous path and delete it in the same session turn. */
   clearWithPreviousPath(
     reauthorize: (stored: string) => Promise<string>,
+    requestSignal?: AbortSignal,
   ): Promise<string | null> {
-    const remove = async (signal?: AbortSignal) => {
+    const remove = async (deadline?: AbortSignal) => {
+      if (!this.writes) requestSignal?.throwIfAborted();
       const stored = await this.get();
       const previousPath = stored === null ? null : await reauthorize(stored);
-      await this.storage.delete(this.key, this.context, signal);
+      requestSignal?.throwIfAborted();
+      // Once dispatched, keep the delete under the queue's storage deadline.
+      await this.storage.delete(this.key, this.context, deadline);
       return previousPath;
     };
-    return this.writes ? this.writes.clear(remove) : remove();
+    return this.writes ? this.writes.clear(remove, requestSignal) : remove();
   }
 }

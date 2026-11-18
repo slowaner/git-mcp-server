@@ -66,6 +66,31 @@ describe('session working-directory store', () => {
     await expect(state.get()).resolves.toBe(repoB);
   });
 
+  it('preserves cwd when a clear is cancelled during path reauthorization', async () => {
+    const storage = new StorageService(new InMemoryProvider());
+    const mutations = new SessionWorkingDirectoryWrites(1_000);
+    const state = new SessionWorkingDirectoryStore(
+      storage,
+      owner,
+      sessionA,
+      context,
+      mutations,
+    );
+    await state.set(repoA);
+    const remove = vi.spyOn(storage, 'delete');
+    const request = new AbortController();
+
+    const clear = state.clearWithPreviousPath(async (stored) => {
+      request.abort();
+      return stored;
+    }, request.signal);
+
+    await expect(clear).rejects.toMatchObject({ name: 'AbortError' });
+    expect(remove).not.toHaveBeenCalled();
+    await expect(state.get()).resolves.toBe(repoA);
+    await expect(mutations.close()).resolves.toBe(true);
+  });
+
   it('does not dispatch a queued clear after an unconfirmed write', async () => {
     const storage = new StorageService(new InMemoryProvider());
     const mutations = new SessionWorkingDirectoryWrites(1_000);

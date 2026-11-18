@@ -40,6 +40,7 @@ import type { ToolDefinition } from '@/mcp-server/tools/utils/toolDefinition.js'
 import { z } from 'zod';
 import { CliGitProvider } from '@/services/git/providers/cli/CliGitProvider.js';
 import { StorageService } from '@/storage/core/StorageService.js';
+import { SessionWorkingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { InMemoryProvider } from '@/storage/providers/inMemory/inMemoryProvider.js';
 import { SupabaseProvider } from '@/storage/providers/supabase/supabaseProvider.js';
 import type { Database } from '@/storage/providers/supabase/supabase.types.js';
@@ -481,6 +482,104 @@ suite('authenticated actual HTTP session and repository isolation', () => {
       finishWrite();
       await Promise.allSettled(requests);
       close.mockRestore();
+      remove.mockRestore();
+      set.mockRestore();
+    }
+  }, 30_000);
+
+  it('preserves cwd when the SDK cancels a clear queued behind a write', async () => {
+    const originalSet = storage.set.bind(storage);
+    let markWriting!: () => void;
+    const writing = new Promise<void>((resolve) => {
+      markWriting = resolve;
+    });
+    let finishWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+    const set = vi
+      .spyOn(storage, 'set')
+      .mockImplementationOnce(async (...args) => {
+        markWriting();
+        await writeGate;
+        await originalSet(...args);
+      });
+    const originalClear =
+      SessionWorkingDirectoryStore.prototype.clearWithPreviousPath;
+    let markQueued!: (entry: { result: Promise<string | null> }) => void;
+    const queued = new Promise<{ result: Promise<string | null> }>(
+      (resolve) => {
+        markQueued = resolve;
+      },
+    );
+    const clear = vi
+      .spyOn(SessionWorkingDirectoryStore.prototype, 'clearWithPreviousPath')
+      .mockImplementationOnce(function (
+        this: SessionWorkingDirectoryStore,
+        ...args
+      ) {
+        const result = originalClear.apply(this, args);
+        markQueued({ result });
+        return result;
+      });
+    const read = vi.spyOn(storage, 'get');
+    const remove = vi.spyOn(storage, 'delete');
+    const controller = new AbortController();
+    const requests: Promise<unknown>[] = [];
+    try {
+      const alice = await token();
+      const sid = await initialize(alice);
+      const write = call(alice, sid, 'git_set_working_dir', { path: first });
+      requests.push(write);
+      await Promise.race([
+        writing,
+        write.then(() => {
+          throw new Error('The cwd write did not start');
+        }),
+      ]);
+
+      const clearing = request(
+        alice,
+        sid,
+        'POST',
+        {
+          jsonrpc: '2.0',
+          id: 8,
+          method: 'tools/call',
+          params: {
+            name: 'git_clear_working_dir',
+            arguments: { confirm: 'yes' },
+          },
+        },
+        controller.signal,
+      );
+      requests.push(clearing);
+      const { result } = await Promise.race([
+        queued,
+        clearing.then(() => {
+          throw new Error('The cwd clear did not enter the queue');
+        }),
+      ]);
+      const cancelled = await request(alice, sid, 'POST', {
+        jsonrpc: '2.0',
+        method: 'notifications/cancelled',
+        params: { requestId: 8, reason: 'Fixture cancelled the clear' },
+      });
+      expect(cancelled.status).toBe(202);
+      await cancelled.text();
+
+      finishWrite();
+      accepted(await write);
+      await Promise.allSettled([result]);
+      expect(read).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+      accepted(await call(alice, sid, 'git_status', { path: '.' }));
+    } finally {
+      finishWrite();
+      controller.abort();
+      await Promise.allSettled(requests);
+      clear.mockRestore();
+      read.mockRestore();
       remove.mockRestore();
       set.mockRestore();
     }
