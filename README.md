@@ -155,10 +155,12 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 | `GIT_SIGN_COMMITS`             | Explicit signing for commits, tags, merges, rebases, cherry-picks, and pulls; `false` defers to native Git config. Only commit/tag retries remove the explicit signing flag (see `signed`/`signingWarning`). | `true`      |
 | `GIT_AUTHOR_NAME`              | Git author name. Aliases: `GIT_USERNAME`, `GIT_USER`. Falls back to global git config.                                                                                                                       | `(none)`    |
 | `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                                                                                   | `(none)`    |
-| `GIT_BASE_DIR`                 | Comma-separated absolute directories; the first anchors relative paths. Tilde expansion is supported. Filesystem roots and literal commas are disallowed.                                                        | `(none)`    |
+| `GIT_BASE_DIR`                 | Comma-separated absolute directories; the first anchors relative paths. Tilde expansion is supported. Filesystem roots and literal commas are disallowed.                                                    | `(none)`    |
 | `GIT_WRAPUP_INSTRUCTIONS_PATH` | Path to custom markdown file with workflow instructions.                                                                                                                                                     | `(none)`    |
 | `MCP_AUTH_SECRET_KEY`          | Shared JWT secret. Set a random secret of at least 32 bytes for `jwt` mode.                                                                                                                                  | `(none)`    |
-| `STORAGE_FILESYSTEM_PATH`      | Local storage directory when using `filesystem`.                                                                                                                                                             | `./.storage` |
+
+With `filesystem`, `STORAGE_FILESYSTEM_PATH` sets the storage directory. It
+defaults to `./.storage`.
 
 ## Running the server
 

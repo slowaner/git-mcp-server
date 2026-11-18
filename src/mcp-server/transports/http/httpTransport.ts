@@ -198,8 +198,6 @@ export function createHttpApp(
   // Health check — unprotected
   app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
-
-
   // Create auth strategy and middleware if auth is enabled
   const authStrategy = createAuthStrategy();
   if (authStrategy) {
