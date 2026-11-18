@@ -282,27 +282,6 @@ const ConfigSchema = z.object({
     enabled: z.coerce.boolean().default(false),
     serviceName: z.string(),
     serviceVersion: z.string(),
-    tracesEndpoint: z.string().url().optional(),
-    metricsEndpoint: z.string().url().optional(),
-    samplingRatio: z.coerce.number().default(1.0),
-    logLevel: z
-      .preprocess(
-        (val) => {
-          const str = emptyStringAsUndefined(val);
-          if (typeof str === 'string') {
-            const lower = str.toLowerCase();
-            const aliasMap: Record<string, string> = {
-              err: 'ERROR',
-              warning: 'WARN',
-              information: 'INFO',
-            };
-            return aliasMap[lower] ?? str.toUpperCase();
-          }
-          return str;
-        },
-        z.enum(['NONE', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'VERBOSE', 'ALL']),
-      )
-      .default('INFO'),
   }),
 });
 
@@ -396,10 +375,6 @@ const parseConfig = () => {
       enabled: env.OTEL_ENABLED,
       serviceName: env.OTEL_SERVICE_NAME,
       serviceVersion: env.OTEL_SERVICE_VERSION,
-      tracesEndpoint: env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
-      metricsEndpoint: env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
-      samplingRatio: env.OTEL_TRACES_SAMPLER_ARG,
-      logLevel: env.OTEL_LOG_LEVEL,
     },
     // The following fields will be derived and are not directly from env
     mcpServerName: env.MCP_SERVER_NAME,

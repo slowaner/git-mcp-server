@@ -21,8 +21,8 @@ This document defines the operational rules for contributing to this codebase. F
      - `createToolHandler` wraps git-specific logic: resolves DI dependencies and working directory before calling your pure logic.
      - Resource handlers (`resourceHandlerFactory`) validate params, invoke logic, apply `responseFormatter`, and catch errors.
 
-2. **Full-Stack Observability**
-   - OpenTelemetry is preconfigured. Logs and errors are automatically correlated to traces.
+2. **Local Observability**
+   - The standalone server writes structured logs locally. OpenTelemetry API utilities support instrumentation in embedded runtimes.
    - `measureToolExecution` automatically records duration, success, payload sizes, and error codes for every tool call.
    - Do not add custom spans in tool/resource logic. The framework handles instrumentation.
 
@@ -432,7 +432,7 @@ Resources follow the same pattern as tools with a declarative `ResourceDefinitio
 | :----------- | :-------------------------------------------------------------------------------------- |
 | `internal/`  | `logger`, `requestContextService`, `ErrorHandler`, `performance` (measureToolExecution) |
 | `security/`  | `sanitization` (path/input validation), `rateLimiter`, `idGenerator`                    |
-| `telemetry/` | OpenTelemetry instrumentation                                                           |
+| `telemetry/` | Trace context and semantic conventions                                                  |
 
 ---
 
@@ -503,7 +503,7 @@ All configuration validated via Zod in `src/config/index.ts`. Derives `serviceNa
 | **Auth**      | `MCP_AUTH_MODE` (`none`/`jwt`/`oauth`), `MCP_AUTH_SECRET_KEY`, `OAUTH_ISSUER_URL`, `OAUTH_AUDIENCE`, `OAUTH_JWKS_URI`                                                                                                                                      |
 | **Storage**   | `STORAGE_PROVIDER_TYPE` (`in-memory`/`filesystem`/`supabase`), `STORAGE_FILESYSTEM_PATH`                                                                                                                                                                   |
 | **Git**       | `GIT_PROVIDER` (`auto`/`cli`/`isomorphic`), `GIT_SIGN_COMMITS`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`, `GIT_BASE_DIR`, `GIT_MAX_COMMAND_TIMEOUT_MS`, `GIT_MAX_BUFFER_SIZE_MB`, `GIT_WRAPUP_INSTRUCTIONS_PATH` |
-| **Telemetry** | `OTEL_ENABLED`, `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`                                                                                                                   |
+| **Telemetry** | `OTEL_ENABLED`, `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`                                                                                                                                                                                                |
 
 ---
 

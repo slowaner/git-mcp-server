@@ -230,7 +230,6 @@ git-mcp-server
 │   │   │   └── sanitization.ts
 │   │   ├── telemetry
 │   │   │   ├── index.ts
-│   │   │   ├── instrumentation.ts
 │   │   │   ├── semconv.ts
 │   │   │   └── trace.ts
 │   │   └── index.ts
