@@ -19,57 +19,81 @@ import {
   currentServerSessionId,
 } from '@/mcp-server/transports/auth/lib/requestIdentity.js';
 
-/** Tracks the writes accepted by one HTTP session until it closes. */
+/** Serializes the working-directory mutations of a single HTTP session. */
 export class SessionWorkingDirectoryWrites {
-  private readonly pending = new Set<Promise<void>>();
+  private settled: Promise<unknown> = Promise.resolve();
   private closing = false;
-  private unconfirmed = false;
+  private unconfirmed: 'write' | 'clear' | undefined;
 
   constructor(private readonly timeoutMs: number) {}
 
-  async run(write: (signal: AbortSignal) => Promise<void>): Promise<void> {
+  run(write: (signal: AbortSignal) => Promise<void>): Promise<void> {
+    return this.enqueue('write', write);
+  }
+
+  clear<T>(remove: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    return this.enqueue('clear', remove);
+  }
+
+  private enqueue<T>(
+    operation: 'write' | 'clear',
+    mutate: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const pending = this.settled.then(() => this.execute(operation, mutate));
+    this.settled = pending.catch(() => {});
+    return pending;
+  }
+
+  private async execute<T>(
+    operation: 'write' | 'clear',
+    mutate: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
     if (this.closing) {
       throw new McpError(
         JsonRpcErrorCode.InvalidRequest,
         'The HTTP session is closing.',
       );
     }
+    if (
+      this.unconfirmed &&
+      (operation === 'clear' || this.unconfirmed === 'clear')
+    ) {
+      throw new McpError(
+        JsonRpcErrorCode.InvalidRequest,
+        `The working-directory ${this.unconfirmed} outcome is unknown.`,
+      );
+    }
+
     const signal = AbortSignal.timeout(this.timeoutMs);
     let abort!: () => void;
     const deadline = new Promise<never>((_, reject) => {
       abort = () => {
-        this.unconfirmed = true;
+        this.unconfirmed ??= operation;
         reject(
           new McpError(
             JsonRpcErrorCode.Timeout,
-            'Working-directory write deadline exceeded.',
+            `Working-directory ${operation} deadline exceeded.`,
           ),
         );
       };
       signal.addEventListener('abort', abort, { once: true });
     });
-    const pending = Promise.race([
-      Promise.resolve().then(() => write(signal)),
-      deadline,
-    ]).catch((error: unknown) => {
+    try {
+      return await Promise.race([mutate(signal), deadline]);
+    } catch (error) {
       if (error instanceof McpError && error.data?.writeOutcome === 'unknown') {
-        this.unconfirmed = true;
+        this.unconfirmed ??= operation;
       }
       throw error;
-    });
-    this.pending.add(pending);
-    try {
-      await pending;
     } finally {
       signal.removeEventListener('abort', abort);
-      this.pending.delete(pending);
     }
   }
 
-  /** Stop new writes and report whether the stored key can be safely deleted. */
+  /** Stop queued and new mutations, then report whether the key can be deleted. */
   async close(): Promise<boolean> {
     this.closing = true;
-    await Promise.allSettled(this.pending);
+    await this.settled;
     return !this.unconfirmed;
   }
 }
@@ -155,8 +179,30 @@ export class SessionWorkingDirectoryStore {
     return this.storage.set(this.key, authorizedPath, this.context);
   }
 
-  /** Clear only this owner/session state on explicit clear or session cleanup. */
+  /** Clear only this owner/session state. */
   clear(signal?: AbortSignal): Promise<boolean> {
+    if (this.writes) {
+      return this.writes.clear((deadline) =>
+        this.storage.delete(
+          this.key,
+          this.context,
+          signal ? AbortSignal.any([signal, deadline]) : deadline,
+        ),
+      );
+    }
     return this.storage.delete(this.key, this.context, signal);
+  }
+
+  /** Reauthorize the previous path and delete it in the same session turn. */
+  clearWithPreviousPath(
+    reauthorize: (stored: string) => Promise<string>,
+  ): Promise<string | null> {
+    const remove = async (signal?: AbortSignal) => {
+      const stored = await this.get();
+      const previousPath = stored === null ? null : await reauthorize(stored);
+      await this.storage.delete(this.key, this.context, signal);
+      return previousPath;
+    };
+    return this.writes ? this.writes.clear(remove) : remove();
   }
 }

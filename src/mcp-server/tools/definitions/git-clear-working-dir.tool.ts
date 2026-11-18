@@ -50,13 +50,11 @@ async function gitClearWorkingDirLogic(
   { storage, appContext }: ToolLogicDependencies,
 ): Promise<ToolOutput> {
   const state = workingDirectoryStore(storage, appContext);
-  const stored = await state.get();
-  const previousPath = stored
-    ? await resolveGitPath(stored, {
-        repositoryRoots: repositoryRootsFromContext(appContext),
-      })
-    : null;
-  await state.clear();
+  const previousPath = await state.clearWithPreviousPath((stored) =>
+    resolveGitPath(stored, {
+      repositoryRoots: repositoryRootsFromContext(appContext),
+    }),
+  );
 
   return {
     success: true,

@@ -6,7 +6,7 @@
  */
 import { inject, injectable } from 'tsyringe';
 
-import { SupabaseClient } from '@supabase/supabase-js';
+import { SupabaseClient, type PostgrestError } from '@supabase/supabase-js';
 
 import { SupabaseAdminClient } from '@/container/tokens.js';
 import type {
@@ -32,6 +32,26 @@ function unconfirmedWrite(cause: unknown): McpError {
     { writeOutcome: 'unknown' },
     { cause },
   );
+}
+
+async function awaitMutation<
+  T extends { error: PostgrestError | null; status: number },
+>(
+  query: PromiseLike<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const result = await Promise.resolve(query).catch((cause: unknown) => {
+    throw signal ? unconfirmedWrite(cause) : cause;
+  });
+  const { error, status } = result;
+  if (error) {
+    // Only a database cancellation reply confirms a failed bounded mutation.
+    if (signal && !(status === 500 && error.code === '57014')) {
+      throw unconfirmedWrite(error);
+    }
+    throw error;
+  }
+  return result;
 }
 
 @injectable()
@@ -113,17 +133,7 @@ export class SupabaseProvider implements IStorageProvider {
         const signal = options?.signal;
         if (signal) query.abortSignal(signal);
 
-        const { error, status } = await Promise.resolve(query).catch(
-          (cause: unknown) => {
-            throw signal ? unconfirmedWrite(cause) : cause;
-          },
-        );
-        if (!error) return;
-        // Only a database cancellation reply confirms a failed bounded write.
-        if (signal && !(status === 500 && error.code === '57014')) {
-          throw unconfirmedWrite(error);
-        }
-        throw error;
+        await awaitMutation(query, signal);
       },
       {
         operation: 'SupabaseProvider.set',
@@ -148,8 +158,7 @@ export class SupabaseProvider implements IStorageProvider {
           .eq('key', key);
         if (signal) query.abortSignal(signal);
 
-        const { error, count } = await query;
-        if (error) throw error;
+        const { count } = await awaitMutation(query, signal);
         return (count ?? 0) > 0;
       },
       {

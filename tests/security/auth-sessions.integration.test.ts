@@ -530,10 +530,13 @@ suite('authenticated actual HTTP session and repository isolation', () => {
         },
       );
       const backend = new StorageService(new SupabaseProvider(supabase));
-      // Previously registered tool handlers cache their StorageService.
+      // Use the same StorageService instance for tool calls and app cleanup.
       const set = vi
         .spyOn(storage, 'set')
         .mockImplementation(backend.set.bind(backend));
+      const remove = vi
+        .spyOn(storage, 'delete')
+        .mockImplementation(backend.delete.bind(backend));
       const controller = new AbortController();
       const requests: Promise<Response>[] = [];
       let isolated: ReturnType<typeof createHttpApp> | undefined;
@@ -544,7 +547,6 @@ suite('authenticated actual HTTP session and repository isolation', () => {
           maxSessionsPerPrincipal: 1,
           requestTimeoutMs: 2_500,
         };
-        container.registerInstance(StorageToken, backend);
         app = isolated = createHttpApp(
           makeServer,
           requestContextService.createRequestContext(),
@@ -570,6 +572,23 @@ suite('authenticated actual HTTP session and repository isolation', () => {
             throw new Error('The Supabase write did not start');
           }),
         ]);
+        if (outcome === 'gateway error') {
+          replyToWrite(new Response('Gateway Timeout', { status: 504 }));
+          const response = await write;
+          expect(response.status).toBe(200);
+          expect(await response.json()).toMatchObject({
+            result: { isError: true },
+          });
+          const clear = await call(alice, sid, 'git_clear_working_dir', {
+            confirm: 'yes',
+          });
+          expect(clear.isError).toBe(true);
+          expect(JSON.stringify(clear.content)).toContain(
+            'The working-directory write outcome is unknown.',
+          );
+          expect(remove).not.toHaveBeenCalled();
+        }
+
         const termination = request(alice, sid, 'DELETE');
         requests.push(termination);
 
@@ -583,8 +602,6 @@ suite('authenticated actual HTTP session and repository isolation', () => {
               { status: 500 },
             ),
           );
-        } else if (outcome === 'gateway error') {
-          replyToWrite(new Response('Gateway Timeout', { status: 504 }));
         }
 
         expect((await termination).status).toBe(200);
@@ -602,9 +619,9 @@ suite('authenticated actual HTTP session and repository isolation', () => {
         replyToWrite(new Response(null, { status: 204 }));
         controller.abort();
         await Promise.allSettled(requests);
+        remove.mockRestore();
         set.mockRestore();
         if (isolated) await closeHttpApp(isolated);
-        container.registerInstance(StorageToken, storage);
         app = authenticated;
         config.httpSecurity = security;
       }

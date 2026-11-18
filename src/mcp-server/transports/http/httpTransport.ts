@@ -145,7 +145,7 @@ export function createHttpApp(
       try {
         if ((await drained) === false) {
           logger.warning(
-            'Skipped HTTP cwd deletion because a write outcome was unconfirmed',
+            'Skipped HTTP cwd deletion because a mutation outcome was unconfirmed',
             transportContext,
           );
           return;
