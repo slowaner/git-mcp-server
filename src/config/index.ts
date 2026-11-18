@@ -2,8 +2,7 @@
  * @fileoverview Loads, validates, and exports application configuration.
  * This module centralizes configuration management, sourcing values from
  * environment variables. It uses Zod for schema validation to ensure type safety
- * and correctness of configuration parameters, and is designed to be
- * environment-agnostic (e.g., Node.js, Cloudflare Workers).
+ * and correctness of configuration parameters for the Node.js and Bun servers.
  *
  * @module src/config/index
  */
@@ -218,13 +217,7 @@ const ConfigSchema = z.object({
           }
           return str;
         },
-        z.enum([
-          'in-memory',
-          'filesystem',
-          'supabase',
-          'cloudflare-r2',
-          'cloudflare-kv',
-        ]),
+        z.enum(['in-memory', 'filesystem', 'supabase']),
       )
       .default('in-memory'),
     filesystemPath: z.preprocess(

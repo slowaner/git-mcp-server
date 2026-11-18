@@ -39,12 +39,7 @@
 
     // Node.js specific
     "lib": ["ES2022"],
-    "types": [
-      "bun-types",
-      "node",
-      "reflect-metadata",
-      "@cloudflare/workers-types"
-    ],
+    "types": ["bun-types", "node", "reflect-metadata"],
 
     // Error on unused locals and parameters
     "noUnusedLocals": true,

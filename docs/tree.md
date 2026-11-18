@@ -193,10 +193,6 @@ git-mcp-server
 │   │   │   ├── StorageService.ts
 │   │   │   └── storageValidation.ts
 │   │   ├── providers
-│   │   │   ├── cloudflare
-│   │   │   │   ├── index.ts
-│   │   │   │   ├── kvProvider.ts
-│   │   │   │   └── r2Provider.ts
 │   │   │   ├── fileSystem
 │   │   │   │   └── fileSystemProvider.ts
 │   │   │   ├── inMemory
@@ -238,8 +234,7 @@ git-mcp-server
 │   │   │   ├── semconv.ts
 │   │   │   └── trace.ts
 │   │   └── index.ts
-│   ├── index.ts
-│   └── worker.ts
+│   └── index.ts
 ├── tests
 │   ├── config
 │   │   ├── index.int.test.ts
@@ -359,9 +354,6 @@ git-mcp-server
 │   │                   └── runtime-adapter.test.ts
 │   ├── storage
 │   │   ├── providers
-│   │   │   ├── cloudflare
-│   │   │   │   ├── kvProvider.test.ts
-│   │   │   │   └── r2Provider.test.ts
 │   │   │   └── inMemory
 │   │   │       └── inMemoryProvider.test.ts
 │   │   └── storageProviderCompliance.test.ts
@@ -407,8 +399,7 @@ git-mcp-server
 ├── tsconfig.test.json
 ├── tsdoc.json
 ├── typedoc.json
-├── vitest.config.ts
-└── wrangler.toml
+└── vitest.config.ts
 ```
 
 _Note: This tree excludes files and directories matched by .gitignore and default patterns._
