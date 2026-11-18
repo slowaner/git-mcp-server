@@ -60,6 +60,12 @@ export async function withGitExecutionContext<T>(
       'Invalid Git request deadline.',
     );
   }
+  if (remaining !== undefined && remaining <= 0) {
+    throw new GitExecutionError(
+      'DEADLINE',
+      'Git operation deadline exceeded before execution.',
+    );
+  }
   const controller = new AbortController();
   const state: ExecutionState = {
     controller,
@@ -73,25 +79,17 @@ export async function withGitExecutionContext<T>(
   executionStates.set(scoped, state);
   let timer: ReturnType<typeof setTimeout> | undefined;
   if (remaining !== undefined) {
-    if (remaining <= 0) {
-      state.failure = new GitExecutionError(
+    timer = setTimeout(() => {
+      state.failure ??= new GitExecutionError(
         'DEADLINE',
-        'Git operation deadline exceeded before execution.',
+        'Git operation deadline exceeded.',
       );
       controller.abort();
-    } else
-      timer = setTimeout(() => {
-        state.failure ??= new GitExecutionError(
-          'DEADLINE',
-          'Git operation deadline exceeded.',
-        );
-        controller.abort();
-      }, remaining);
+    }, remaining);
   }
 
   return executionContext.run(scoped, async () => {
     try {
-      if (state.failure) throw state.failure;
       if (controller.signal.aborted)
         throw new GitExecutionError(
           'CANCELLED',
@@ -119,7 +117,6 @@ export async function withGitExecutionContext<T>(
       }
       if (state.failure) throw state.failure;
       state.budget?.assertActive();
-      // eslint-disable-next-line @typescript-eslint/only-throw-error -- Preserve the operation's original rejection.
       if (!outcome.ok) throw outcome.error;
       if (controller.signal.aborted)
         throw new GitExecutionError('CANCELLED', 'Git request cancelled.');
