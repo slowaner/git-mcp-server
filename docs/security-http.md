@@ -105,9 +105,8 @@ and session isolation remediation in the dependent security stack.
 ## Locked runtime dependencies
 
 The tested security floors are SDK 1.32.2, Zod 4.6.6, Hono 4.13.16 and node-server
-2.1.6. Overrides also constrain their transitive copies. Additional bundled or
-external runtime patches pin grpc-js 1.14.5, fast-uri 3.1.9, systeminformation
-5.33.16 and fast-copy 4.1.0. The project toolchain pin is Bun 1.4.3.
+2.1.6. Overrides also constrain their transitive copies and pin fast-uri 3.1.9
+and fast-copy 4.1.0. The project toolchain pin is Bun 1.4.3.
 
 SDK upgrades alone do not enable collection limits, and dependency placement in
 devDependencies does not imply exclusion from the production bundle. The HTTP

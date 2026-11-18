@@ -340,7 +340,7 @@ async function spawnWithNode(
  * @param args - Git command arguments (e.g., ['status', '--porcelain'])
  * @param cwd - Working directory for command execution
  * @param env - Environment variables
- * @param timeout - Timeout in milliseconds (default: 60000)
+ * @param timeout - Configured command timeout in milliseconds
  * @param signal - Optional AbortSignal for cancellation support
  * @returns Promise resolving to stdout and stderr
  * @throws Error if the command fails, times out, or is cancelled
@@ -361,7 +361,7 @@ export async function spawnGitCommand(
   args: string[],
   cwd: string,
   env: Record<string, string>,
-  timeout = 60000,
+  timeout: number,
   signal?: AbortSignal,
   allowNonZeroExit = false,
 ): Promise<GitCommandResult> {

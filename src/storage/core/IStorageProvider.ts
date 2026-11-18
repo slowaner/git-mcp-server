@@ -14,8 +14,6 @@ import type { RequestContext } from '@/utils/index.js';
  *   - `in-memory`: TTL enforced by `setTimeout` for proactive deletion.
  *   - `filesystem`: TTL stored in a metadata envelope; expired items are filtered on `get()` and `list()`.
  *   - `supabase`: TTL managed via an `expires_at` column; expired rows are handled by database queries.
- *   - `cloudflare-kv`: TTL is a native feature of the KV store.
- *   - `cloudflare-r2`: TTL stored in a metadata envelope; expired items are filtered on `get()`. `list()` does not filter expired items due to performance cost.
  */
 export interface StorageOptions {
   /**

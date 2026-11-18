@@ -25,7 +25,9 @@ describe('Configuration Service', () => {
     // Unset variables to ensure defaults are tested
     delete process.env.NODE_ENV;
     delete process.env.STORAGE_PROVIDER_TYPE;
+    delete process.env.GIT_MAX_COMMAND_TIMEOUT_MS;
     const config = parseConfig();
+    expect(config.git.maxCommandTimeoutMs).toBe(60000);
     expect(config.environment).toBe('development');
     expect(config.logLevel).toBe('debug');
     expect(config.mcpHttpPort).toBe(3015);
@@ -96,25 +98,14 @@ describe('Configuration Service', () => {
       const { parseConfig: p2 } = await import('../../src/config/index.js');
       expect(p2().storage.providerType).toBe('filesystem');
     });
-
-    it('should handle aliases for openTelemetry.logLevel', async () => {
-      process.env.OTEL_LOG_LEVEL = 'warning';
-      const { parseConfig: p1 } = await import('../../src/config/index.js');
-      expect(p1().openTelemetry.logLevel).toBe('WARN');
-
-      process.env.OTEL_LOG_LEVEL = 'err';
-      const { parseConfig: p2 } = await import('../../src/config/index.js');
-      expect(p2().openTelemetry.logLevel).toBe('ERROR');
-
-      process.env.OTEL_LOG_LEVEL = 'information';
-      const { parseConfig: p3 } = await import('../../src/config/index.js');
-      expect(p3().openTelemetry.logLevel).toBe('INFO');
-    });
   });
 
-  it('should handle telemetry configuration', async () => {
+  it('ignores legacy telemetry exporter settings', async () => {
     process.env.OTEL_ENABLED = 'true';
-    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'http://localhost:4318';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'invalid-url';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = 'invalid-url';
+    process.env.OTEL_TRACES_SAMPLER_ARG = 'invalid-number';
+    process.env.OTEL_LOG_LEVEL = 'invalid-level';
     process.env.OTEL_SERVICE_NAME = 'TestService';
 
     const { parseConfig } = await import('../../src/config/index.js');
@@ -122,7 +113,8 @@ describe('Configuration Service', () => {
 
     expect(config.openTelemetry.enabled).toBe(true);
     expect(config.openTelemetry.serviceName).toBe('TestService');
-    expect(config.openTelemetry.tracesEndpoint).toBe('http://localhost:4318');
+    expect(config.openTelemetry).not.toHaveProperty('tracesEndpoint');
+    expect(config.openTelemetry).not.toHaveProperty('metricsEndpoint');
   });
 
   it('should disable telemetry by default if OTEL_ENABLED is not set', async () => {
