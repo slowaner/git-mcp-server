@@ -277,7 +277,12 @@ const ConfigSchema = z.object({
         ])
         .optional(),
     ),
-    maxCommandTimeoutMs: z.coerce.number().default(30000),
+    maxCommandTimeoutMs: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(2147483647)
+      .default(60000),
     maxBufferSizeMb: z.coerce.number().default(10),
   }),
   openTelemetry: z.object({

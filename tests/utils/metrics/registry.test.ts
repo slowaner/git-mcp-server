@@ -2,31 +2,28 @@
  * @fileoverview Tests for the metrics registry helper, covering enabled and disabled paths.
  * @module tests/utils/metrics/registry.test
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import { config } from '@/config/index.js';
 
 const meterMock = {
   createCounter: vi.fn(),
   createHistogram: vi.fn(),
 };
 const getMeterMock = vi.fn(() => meterMock);
-const configMock = {
-  openTelemetry: {
-    enabled: false,
-    serviceName: 'test-service',
-    serviceVersion: '0.0.1',
-    logLevel: 'INFO',
-    samplingRatio: 1,
-  },
-};
+const originalEnabled = config.openTelemetry.enabled;
 
 vi.mock('@opentelemetry/api', () => ({
   metrics: {
     getMeter: getMeterMock,
   },
-}));
-
-vi.mock('@/config/index.js', () => ({
-  config: configMock,
 }));
 
 let metricsRegistry: typeof import('../../../src/utils/metrics/registry.js').metricsRegistry;
@@ -37,8 +34,12 @@ beforeAll(async () => {
 });
 
 describe('metricsRegistry', () => {
+  afterEach(() => {
+    config.openTelemetry.enabled = originalEnabled;
+  });
+
   beforeEach(() => {
-    configMock.openTelemetry.enabled = false;
+    config.openTelemetry.enabled = false;
     getMeterMock.mockClear();
     meterMock.createCounter.mockReset();
     meterMock.createHistogram.mockReset();
@@ -53,7 +54,7 @@ describe('metricsRegistry', () => {
   });
 
   it('creates and caches counters and histograms when enabled', () => {
-    configMock.openTelemetry.enabled = true;
+    config.openTelemetry.enabled = true;
 
     const counterWithOptions = {
       add: vi.fn(),
@@ -98,8 +99,8 @@ describe('metricsRegistry', () => {
     );
 
     expect(getMeterMock).toHaveBeenCalledWith(
-      configMock.openTelemetry.serviceName,
-      configMock.openTelemetry.serviceVersion,
+      config.openTelemetry.serviceName,
+      config.openTelemetry.serviceVersion,
     );
     expect(meterMock.createCounter).toHaveBeenCalledWith('requests_total', {
       description: 'Number of successful requests',

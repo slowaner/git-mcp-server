@@ -18,14 +18,12 @@
 
 import { existsSync, statSync } from 'node:fs';
 
+import { config } from '@/config/index.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 
 import { mapGitError } from './error-mapper.js';
 import { buildGitEnv, validateGitArgs } from './command-builder.js';
 import { spawnGitCommand } from './runtime-adapter.js';
-
-/** Maximum execution time for git commands (60 seconds) */
-const GIT_COMMAND_TIMEOUT_MS = 60000;
 
 /**
  * Executes a git command with cross-runtime support.
@@ -97,7 +95,7 @@ export async function executeGitCommand(
       args,
       cwd,
       buildGitEnv(process.env as Record<string, string>),
-      GIT_COMMAND_TIMEOUT_MS,
+      config.git.maxCommandTimeoutMs,
       undefined,
       options.allowNonZeroExit,
     );
