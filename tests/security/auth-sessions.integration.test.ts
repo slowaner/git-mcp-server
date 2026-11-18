@@ -487,103 +487,123 @@ suite('authenticated actual HTTP session and repository isolation', () => {
     }
   }, 30_000);
 
-  it('preserves cwd when the SDK cancels a clear queued behind a write', async () => {
-    const originalSet = storage.set.bind(storage);
-    let markWriting!: () => void;
-    const writing = new Promise<void>((resolve) => {
-      markWriting = resolve;
-    });
-    let finishWrite!: () => void;
-    const writeGate = new Promise<void>((resolve) => {
-      finishWrite = resolve;
-    });
-    const set = vi
-      .spyOn(storage, 'set')
-      .mockImplementationOnce(async (...args) => {
-        markWriting();
-        await writeGate;
-        await originalSet(...args);
+  it.each([8, 0, ''] as const)(
+    'preserves the session and cwd after cancelling a queued clear with request id %j',
+    async (requestId) => {
+      const originalSet = storage.set.bind(storage);
+      let markWriting!: () => void;
+      const writing = new Promise<void>((resolve) => {
+        markWriting = resolve;
       });
-    const originalClear =
-      SessionWorkingDirectoryStore.prototype.clearWithPreviousPath;
-    let markQueued!: (entry: { result: Promise<string | null> }) => void;
-    const queued = new Promise<{ result: Promise<string | null> }>(
-      (resolve) => {
-        markQueued = resolve;
-      },
-    );
-    const clear = vi
-      .spyOn(SessionWorkingDirectoryStore.prototype, 'clearWithPreviousPath')
-      .mockImplementationOnce(function (
-        this: SessionWorkingDirectoryStore,
-        ...args
-      ) {
-        const result = originalClear.apply(this, args);
-        markQueued({ result });
-        return result;
+      let finishWrite!: () => void;
+      const writeGate = new Promise<void>((resolve) => {
+        finishWrite = resolve;
       });
-    const read = vi.spyOn(storage, 'get');
-    const remove = vi.spyOn(storage, 'delete');
-    const controller = new AbortController();
-    const requests: Promise<unknown>[] = [];
-    try {
-      const alice = await token();
-      const sid = await initialize(alice);
-      const write = call(alice, sid, 'git_set_working_dir', { path: first });
-      requests.push(write);
-      await Promise.race([
-        writing,
-        write.then(() => {
-          throw new Error('The cwd write did not start');
-        }),
-      ]);
+      const set = vi
+        .spyOn(storage, 'set')
+        .mockImplementationOnce(async (...args) => {
+          markWriting();
+          await writeGate;
+          await originalSet(...args);
+        });
+      const originalClear =
+        SessionWorkingDirectoryStore.prototype.clearWithPreviousPath;
+      let markQueued!: (entry: { result: Promise<string | null> }) => void;
+      const queued = new Promise<{ result: Promise<string | null> }>(
+        (resolve) => {
+          markQueued = resolve;
+        },
+      );
+      const clear = vi
+        .spyOn(SessionWorkingDirectoryStore.prototype, 'clearWithPreviousPath')
+        .mockImplementationOnce(function (
+          this: SessionWorkingDirectoryStore,
+          ...args
+        ) {
+          const result = originalClear.apply(this, args);
+          markQueued({ result });
+          return result;
+        });
+      const read = vi.spyOn(storage, 'get');
+      const remove = vi.spyOn(storage, 'delete');
+      const authenticated = app;
+      const security = config.httpSecurity;
+      const requestTimeoutMs = 1_500;
+      const requests: Promise<unknown>[] = [];
+      try {
+        config.httpSecurity = { ...security, requestTimeoutMs };
+        app = createHttpApp(
+          makeServer,
+          requestContextService.createRequestContext(),
+        );
+        const alice = await token();
+        const sid = await initialize(alice);
+        const write = call(alice, sid, 'git_set_working_dir', { path: first });
+        requests.push(write);
+        await Promise.race([
+          writing,
+          write.then(() => {
+            throw new Error('The cwd write did not start');
+          }),
+        ]);
 
-      const clearing = request(
-        alice,
-        sid,
-        'POST',
-        {
+        const clearing = request(alice, sid, 'POST', {
           jsonrpc: '2.0',
-          id: 8,
+          id: requestId,
           method: 'tools/call',
           params: {
             name: 'git_clear_working_dir',
             arguments: { confirm: 'yes' },
           },
-        },
-        controller.signal,
-      );
-      requests.push(clearing);
-      const { result } = await Promise.race([
-        queued,
-        clearing.then(() => {
-          throw new Error('The cwd clear did not enter the queue');
-        }),
-      ]);
-      const cancelled = await request(alice, sid, 'POST', {
-        jsonrpc: '2.0',
-        method: 'notifications/cancelled',
-        params: { requestId: 8, reason: 'Fixture cancelled the clear' },
-      });
-      expect(cancelled.status).toBe(202);
-      await cancelled.text();
+        });
+        requests.push(clearing);
+        const { result } = await Promise.race([
+          queued,
+          clearing.then(() => {
+            throw new Error('The cwd clear did not enter the queue');
+          }),
+        ]);
+        const cancelled = await request(alice, sid, 'POST', {
+          jsonrpc: '2.0',
+          method: 'notifications/cancelled',
+          params: { requestId, reason: 'Fixture cancelled the clear' },
+        });
+        expect(cancelled.status).toBe(202);
+        await cancelled.text();
 
-      finishWrite();
-      accepted(await write);
-      await Promise.allSettled([result]);
-      expect(read).not.toHaveBeenCalled();
-      expect(remove).not.toHaveBeenCalled();
-      accepted(await call(alice, sid, 'git_status', { path: '.' }));
-    } finally {
-      finishWrite();
-      controller.abort();
-      await Promise.allSettled(requests);
-      clear.mockRestore();
-      read.mockRestore();
-      remove.mockRestore();
-      set.mockRestore();
-    }
-  }, 30_000);
+        finishWrite();
+        accepted(await write);
+        await Promise.allSettled([result]);
+        expect(read).not.toHaveBeenCalled();
+        expect(remove).not.toHaveBeenCalled();
+        const response = await clearing;
+        await new Promise((resolve) =>
+          setTimeout(resolve, requestTimeoutMs + 50),
+        );
+        accepted(await call(alice, sid, 'git_status', { path: '.' }));
+        expect(response.status).toBe(200);
+        expect(response.headers.get('content-type')).toBe('text/event-stream');
+        expect(await response.text()).toBe('');
+        const ping = await request(alice, sid, 'POST', {
+          jsonrpc: '2.0',
+          id: requestId,
+          method: 'ping',
+        });
+        expect(await ping.json()).toMatchObject({ id: requestId, result: {} });
+      } finally {
+        finishWrite();
+        await Promise.allSettled(requests);
+        if (app !== authenticated) await closeHttpApp(app);
+        app = authenticated;
+        config.httpSecurity = security;
+        clear.mockRestore();
+        read.mockRestore();
+        remove.mockRestore();
+        set.mockRestore();
+      }
+    },
+    30_000,
+  );
 
   it.each([
     'database cancellation',

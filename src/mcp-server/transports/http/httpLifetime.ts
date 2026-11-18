@@ -2,7 +2,15 @@
  * @fileoverview HTTP cancellation and response-stream lifetime ownership.
  * @module mcp-server/transports/http/httpLifetime
  */
+import { randomUUID } from 'node:crypto';
 import type { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import {
+  CancelledNotificationSchema,
+  isJSONRPCRequest,
+  JSONRPCResponseSchema,
+  type JSONRPCNotification,
+  type RequestId,
+} from '@modelcontextprotocol/sdk/types.js';
 import { HttpLimitError } from './httpSecurity.js';
 import type { AdmissionRelease } from './httpAdmission.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -52,27 +60,84 @@ export async function createServerWithinDeadline(
   }
 }
 
-/** Translate HTTP disconnect/deadline into the SDK's supported cancellation notification. */
+type HttpTransport = WebStandardStreamableHTTPServerTransport;
+type PendingPost = {
+  transportId: RequestId;
+  cancelled?: Promise<boolean>;
+};
+
+const activePosts = new WeakMap<HttpTransport, Map<RequestId, PendingPost>>();
+
+function pendingPosts(transport: HttpTransport): Map<RequestId, PendingPost> {
+  let posts = activePosts.get(transport);
+  if (!posts) {
+    posts = new Map();
+    activePosts.set(transport, posts);
+  }
+  return posts;
+}
+
+/** Free SDK response correlation after the SDK has accepted the cancellation. */
+async function finishCancelledPost(
+  transport: HttpTransport,
+  post: PendingPost,
+): Promise<void> {
+  // The SDK settles a JSON POST only when send() supplies a response for its id.
+  // This internal response is consumed below and is never sent to the client.
+  post.cancelled ??= transport
+    .send({
+      jsonrpc: '2.0',
+      id: post.transportId,
+      error: { code: -32800, message: 'Request cancelled.' },
+    })
+    .then(
+      () => true,
+      () => false, // The request already completed or the transport closed.
+    );
+  await post.cancelled;
+}
+
+/** Separate explicit MCP cancellation from an HTTP deadline or disconnect. */
 export async function dispatchWithDeadline(
-  transport: WebStandardStreamableHTTPServerTransport,
+  transport: HttpTransport,
   request: Request,
   body: unknown,
   timeoutMs: number,
 ): Promise<Response> {
+  const posts = pendingPosts(transport);
+  const rpc = isJSONRPCRequest(body) ? body : undefined;
+  const requestId = rpc?.method === 'initialize' ? undefined : rpc?.id;
+  const notification = CancelledNotificationSchema.safeParse(body).data;
+  const cancelledId = notification?.params.requestId;
+  const target = cancelledId === undefined ? undefined : posts.get(cancelledId);
+
+  let post: PendingPost | undefined;
+  let parsedBody = body;
+  if (requestId !== undefined) {
+    if (posts.has(requestId))
+      throw new HttpLimitError(400, 'JSON-RPC request id is already in use.');
+    // The SDK's cancellation handler ignores falsy ids, which JSON-RPC allows.
+    post = { transportId: requestId || randomUUID() };
+    posts.set(requestId, post);
+    if (post.transportId !== requestId)
+      parsedBody = { ...rpc, id: post.transportId };
+  } else if (target && notification && target.transportId !== cancelledId) {
+    parsedBody = {
+      ...(body as JSONRPCNotification),
+      params: { ...notification.params, requestId: target.transportId },
+    };
+  }
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
   const expired = new Promise<never>((_, reject) => {
     abort = () => {
-      if (
-        body &&
-        typeof body === 'object' &&
-        'id' in body &&
-        (typeof body.id === 'number' || typeof body.id === 'string')
-      ) {
+      const id = post?.transportId ?? rpc?.id;
+      if (id !== undefined) {
         transport.onmessage?.({
           jsonrpc: '2.0',
           method: 'notifications/cancelled',
-          params: { requestId: body.id, reason: 'HTTP request ended' },
+          params: { requestId: id, reason: 'HTTP request ended' },
         });
       }
       reject(new HttpLimitError(408, 'HTTP operation deadline or disconnect.'));
@@ -83,13 +148,36 @@ export async function dispatchWithDeadline(
   try {
     if (request.signal.aborted)
       throw new HttpLimitError(408, 'Request aborted.');
-    return await Promise.race([
-      transport.handleRequest(request, { parsedBody: body }),
+    const response = await Promise.race([
+      transport.handleRequest(request, { parsedBody }),
       expired,
     ]);
+    if (
+      response.status === 202 &&
+      cancelledId !== undefined &&
+      target &&
+      posts.get(cancelledId) === target
+    ) {
+      await finishCancelledPost(transport, target);
+    }
+
+    if (await post?.cancelled) {
+      const headers = new Headers(response.headers);
+      headers.set('content-type', 'text/event-stream');
+      return new Response('', { headers });
+    }
+    if (post && post.transportId !== requestId && response.status === 200) {
+      const message = JSONRPCResponseSchema.parse(await response.json());
+      return Response.json(
+        { ...message, id: requestId },
+        { headers: response.headers },
+      );
+    }
+    return response;
   } finally {
     clearTimeout(timer);
     if (abort) request.signal.removeEventListener('abort', abort);
+    if (requestId !== undefined) posts.delete(requestId);
   }
 }
 

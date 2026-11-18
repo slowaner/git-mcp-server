@@ -492,7 +492,7 @@ export function createHttpApp(
             policy.requestTimeoutMs,
           );
         } catch (error) {
-          // Close cancelled transport correlations; reconnect requires initialization.
+          // Only an HTTP deadline or disconnect invalidates the transport.
           if (error instanceof HttpLimitError && error.status === 408)
             await cleanup(sessionId);
           throw error;
