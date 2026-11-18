@@ -66,6 +66,7 @@ export class StorageService {
   ): Promise<void> {
     const tenantId = getTenantId(context);
     encodeStorageKey(tenantId, key);
+    options?.signal?.throwIfAborted();
     return this.provider.set(tenantId, key, value, context, options);
   }
 

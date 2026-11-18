@@ -143,7 +143,13 @@ export function createHttpApp(
       }
 
       try {
-        await drained;
+        if ((await drained) === false) {
+          logger.warning(
+            'Skipped HTTP cwd deletion because a write outcome was unconfirmed',
+            transportContext,
+          );
+          return;
+        }
         const owner = session?.owner;
         if (owner && container.isRegistered(StorageServiceToken)) {
           const storage =
@@ -531,7 +537,9 @@ export function createHttpApp(
         const activeServer = server;
         const newSessionId = randomUUID();
         const owner = currentPrincipal();
-        const cwdWrites = new SessionWorkingDirectoryWrites();
+        const cwdWrites = new SessionWorkingDirectoryWrites(
+          policy.requestTimeoutMs,
+        );
         transport = new StreamableHTTPTransport({
           enableJsonResponse: true,
           maxRequestBodySize: policy.maxBodyBytes,

@@ -486,6 +486,132 @@ suite('authenticated actual HTTP session and repository isolation', () => {
     }
   }, 30_000);
 
+  it.each([
+    'database cancellation',
+    'gateway error',
+    'client deadline',
+  ] as const)(
+    'closes a session after a Supabase write ends with %s',
+    async (outcome) => {
+      const authenticated = app;
+      const security = config.httpSecurity;
+      const events: string[] = [];
+      let reportWrite!: (signal: AbortSignal) => void;
+      const writeStarted = new Promise<AbortSignal>((resolve) => {
+        reportWrite = resolve;
+      });
+      let replyToWrite!: (response: Response) => void;
+      const storageReply = new Promise<Response>((resolve) => {
+        replyToWrite = resolve;
+      });
+      const fetchStorage = Object.assign(
+        async (...[, options]: Parameters<typeof globalThis.fetch>) => {
+          if (options?.method === 'DELETE') {
+            events.push('delete');
+            return new Response(null, { status: 204 });
+          }
+          if (options?.method !== 'POST' || !options.signal) {
+            throw new Error('Expected a cancellable storage upsert');
+          }
+          reportWrite(options.signal);
+          // Keep the write pending even when the client stops waiting.
+          const response = await storageReply;
+          events.push('write reply');
+          return response;
+        },
+        { preconnect: vi.fn() },
+      );
+      const supabase = createClient<Database, 'public'>(
+        'https://storage.example.test',
+        'synthetic-storage-service-key',
+        {
+          auth: { persistSession: false, autoRefreshToken: false },
+          global: { fetch: fetchStorage },
+        },
+      );
+      const backend = new StorageService(new SupabaseProvider(supabase));
+      // Previously registered tool handlers cache their StorageService.
+      const set = vi
+        .spyOn(storage, 'set')
+        .mockImplementation(backend.set.bind(backend));
+      const controller = new AbortController();
+      const requests: Promise<Response>[] = [];
+      let isolated: ReturnType<typeof createHttpApp> | undefined;
+      try {
+        config.httpSecurity = {
+          ...security,
+          maxSessions: 1,
+          maxSessionsPerPrincipal: 1,
+          requestTimeoutMs: 2_500,
+        };
+        container.registerInstance(StorageToken, backend);
+        app = isolated = createHttpApp(
+          makeServer,
+          requestContextService.createRequestContext(),
+        );
+        const alice = await token();
+        const sid = await initialize(alice);
+        const write = request(
+          alice,
+          sid,
+          'POST',
+          {
+            jsonrpc: '2.0',
+            id: 7,
+            method: 'tools/call',
+            params: { name: 'git_set_working_dir', arguments: { path: first } },
+          },
+          controller.signal,
+        );
+        requests.push(write);
+        const signal = await Promise.race([
+          writeStarted,
+          write.then(() => {
+            throw new Error('The Supabase write did not start');
+          }),
+        ]);
+        const termination = request(alice, sid, 'DELETE');
+        requests.push(termination);
+
+        if (outcome === 'database cancellation') {
+          replyToWrite(
+            Response.json(
+              {
+                code: '57014',
+                message: 'canceling statement due to statement timeout',
+              },
+              { status: 500 },
+            ),
+          );
+        } else if (outcome === 'gateway error') {
+          replyToWrite(new Response('Gateway Timeout', { status: 504 }));
+        }
+
+        expect((await termination).status).toBe(200);
+        expect(signal.aborted).toBe(outcome === 'client deadline');
+        expect(events).toEqual(
+          outcome === 'database cancellation'
+            ? ['write reply', 'delete']
+            : outcome === 'gateway error'
+              ? ['write reply']
+              : [],
+        );
+        const replacement = await initialize(alice);
+        expect(replacement).not.toBe(sid);
+      } finally {
+        replyToWrite(new Response(null, { status: 204 }));
+        controller.abort();
+        await Promise.allSettled(requests);
+        set.mockRestore();
+        if (isolated) await closeHttpApp(isolated);
+        container.registerInstance(StorageToken, storage);
+        app = authenticated;
+        config.httpSecurity = security;
+      }
+    },
+    30_000,
+  );
+
   it('limits closing sessions and aborts a slow Supabase cleanup at the deadline', async () => {
     const authenticated = app;
     const security = config.httpSecurity;

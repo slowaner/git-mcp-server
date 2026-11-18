@@ -23,26 +23,54 @@ import {
 export class SessionWorkingDirectoryWrites {
   private readonly pending = new Set<Promise<void>>();
   private closing = false;
+  private unconfirmed = false;
 
-  async run(write: () => Promise<void>): Promise<void> {
+  constructor(private readonly timeoutMs: number) {}
+
+  async run(write: (signal: AbortSignal) => Promise<void>): Promise<void> {
     if (this.closing) {
       throw new McpError(
         JsonRpcErrorCode.InvalidRequest,
         'The HTTP session is closing.',
       );
     }
-    const pending = Promise.resolve().then(write);
+    const signal = AbortSignal.timeout(this.timeoutMs);
+    let abort!: () => void;
+    const deadline = new Promise<never>((_, reject) => {
+      abort = () => {
+        this.unconfirmed = true;
+        reject(
+          new McpError(
+            JsonRpcErrorCode.Timeout,
+            'Working-directory write deadline exceeded.',
+          ),
+        );
+      };
+      signal.addEventListener('abort', abort, { once: true });
+    });
+    const pending = Promise.race([
+      Promise.resolve().then(() => write(signal)),
+      deadline,
+    ]).catch((error: unknown) => {
+      if (error instanceof McpError && error.data?.writeOutcome === 'unknown') {
+        this.unconfirmed = true;
+      }
+      throw error;
+    });
     this.pending.add(pending);
     try {
       await pending;
     } finally {
+      signal.removeEventListener('abort', abort);
       this.pending.delete(pending);
     }
   }
 
-  async close(): Promise<void> {
+  /** Stop new writes and report whether the stored key can be safely deleted. */
+  async close(): Promise<boolean> {
     this.closing = true;
     await Promise.allSettled(this.pending);
+    return !this.unconfirmed;
   }
 }
 
@@ -119,8 +147,12 @@ export class SessionWorkingDirectoryStore {
         'Working directory must be an authorized absolute path.',
       );
     }
-    const write = () => this.storage.set(this.key, authorizedPath, this.context);
-    return this.writes ? this.writes.run(write) : write();
+    if (this.writes) {
+      return this.writes.run((signal) =>
+        this.storage.set(this.key, authorizedPath, this.context, { signal }),
+      );
+    }
+    return this.storage.set(this.key, authorizedPath, this.context);
   }
 
   /** Clear only this owner/session state on explicit clear or session cleanup. */

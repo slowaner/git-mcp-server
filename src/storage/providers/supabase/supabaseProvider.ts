@@ -20,9 +20,19 @@ import type {
   Database,
 } from '@/storage/providers/supabase/supabase.types.js';
 import { ErrorHandler, type RequestContext, logger } from '@/utils/index.js';
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 
 const TABLE_NAME = 'kv_store';
 const DEFAULT_LIST_LIMIT = 1000;
+
+function unconfirmedWrite(cause: unknown): McpError {
+  return new McpError(
+    JsonRpcErrorCode.DatabaseError,
+    'The storage write outcome could not be confirmed.',
+    { writeOutcome: 'unknown' },
+    { cause },
+  );
+}
 
 @injectable()
 export class SupabaseProvider implements IStorageProvider {
@@ -92,7 +102,7 @@ export class SupabaseProvider implements IStorageProvider {
           ? new Date(Date.now() + options.ttl * 1000).toISOString()
           : null;
 
-        const { error } = await this.getClient()
+        const query = this.getClient()
           .from(TABLE_NAME)
           .upsert({
             tenant_id: tenantId,
@@ -100,8 +110,20 @@ export class SupabaseProvider implements IStorageProvider {
             value: value as Json,
             expires_at,
           });
+        const signal = options?.signal;
+        if (signal) query.abortSignal(signal);
 
-        if (error) throw error;
+        const { error, status } = await Promise.resolve(query).catch(
+          (cause: unknown) => {
+            throw signal ? unconfirmedWrite(cause) : cause;
+          },
+        );
+        if (!error) return;
+        // Only a database cancellation reply confirms a failed bounded write.
+        if (signal && !(status === 500 && error.code === '57014')) {
+          throw unconfirmedWrite(error);
+        }
+        throw error;
       },
       {
         operation: 'SupabaseProvider.set',

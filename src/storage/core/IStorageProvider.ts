@@ -21,6 +21,11 @@ export interface StorageOptions {
    * If not provided, the item will be stored indefinitely.
    */
   ttl?: number;
+  /**
+   * Request cancellation. If the backend cannot confirm a write's outcome,
+   * it rejects with a McpError whose data contains writeOutcome: 'unknown'.
+   */
+  signal?: AbortSignal;
 }
 
 /**
