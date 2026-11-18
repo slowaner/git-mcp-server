@@ -47,7 +47,7 @@ No collection is silently truncated.
 | --- | ---: | --- |
 | `MCP_HTTP_MAX_BODY_BYTES` | 262144 | Streamed bytes, including whitespace |
 | `MCP_HTTP_BODY_TIMEOUT_MS` | 10000 | Total body-read deadline |
-| `MCP_HTTP_REQUEST_TIMEOUT_MS` | 60000 | Factory/operation/response deadline |
+| `MCP_HTTP_REQUEST_TIMEOUT_MS` | 60000 | Factory, operation, and non-SSE response deadline |
 | `MCP_HTTP_STREAM_TIMEOUT_MS` | 60000 | Standalone SSE lifetime; reconnect normally |
 | `MCP_TOOL_MAX_ELEMENTS` | 4096 | Array elements plus object members |
 | `MCP_TOOL_MAX_ARRAY_LENGTH` | 1000 | Entries per tool input array |
@@ -93,7 +93,9 @@ HTTP requests and active tool work have separate bounded accounting. Actual tool
 work retains its slot until its promise settles, including after client
 cancellation. HTTP disconnect/deadline sends the SDK cancellation notification;
 native process termination still depends on the Git execution policy and signal
-propagation. Request, session and SSE counts complement OS process/memory limits.
+propagation. Request, session and SSE counts complement OS process/memory limits. Both leases
+for a standalone SSE response follow the stream deadline. The HTTP socket idle
+timeout uses the larger of the request and stream deadlines.
 
 `httpPrincipalKey()` is the identity adapter for admission. Only authenticated
 middleware context supplies its tuple; no token, caller header, body field or
