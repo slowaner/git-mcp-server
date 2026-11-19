@@ -4,36 +4,23 @@
  * storage backend to be selected via environment variables.
  * @module src/storage/core/storageFactory
  */
-import { container } from 'tsyringe';
-import type { SupabaseClient } from '@supabase/supabase-js';
-
 import type { AppConfig } from '@/config/index.js';
-import type { Database } from '@/storage/providers/supabase/supabase.types.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import type { IStorageProvider } from '@/storage/core/IStorageProvider.js';
 import { FileSystemProvider } from '@/storage/providers/fileSystem/fileSystemProvider.js';
 import { InMemoryProvider } from '@/storage/providers/inMemory/inMemoryProvider.js';
-import { SupabaseProvider } from '@/storage/providers/supabase/supabaseProvider.js';
 import { logger, requestContextService } from '@/utils/index.js';
-
-export interface StorageFactoryDeps {
-  supabaseClient?: SupabaseClient<Database>;
-}
 
 /**
  * Creates and returns a storage provider instance based on the provided configuration.
  *
  * @param config - The application configuration object, typically resolved
  *                 from the DI container.
- * @param deps - Optional object containing pre-resolved dependencies for providers.
  * @returns An instance of a class that implements the IStorageProvider interface.
  * @throws {McpError} If the configuration is missing required values for the
  *         selected provider.
  */
-export function createStorageProvider(
-  config: AppConfig,
-  deps: StorageFactoryDeps = {},
-): IStorageProvider {
+export function createStorageProvider(config: AppConfig): IStorageProvider {
   const context = requestContextService.createRequestContext({
     operation: 'createStorageProvider',
   });
@@ -54,19 +41,6 @@ export function createStorageProvider(
         );
       }
       return new FileSystemProvider(config.storage.filesystemPath);
-    case 'supabase':
-      if (!config.supabase?.url || !config.supabase?.serviceRoleKey) {
-        throw new McpError(
-          JsonRpcErrorCode.ConfigurationError,
-          'SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set for the supabase storage provider.',
-          context,
-        );
-      }
-      if (deps.supabaseClient) {
-        return new SupabaseProvider(deps.supabaseClient);
-      }
-      // Fallback to DI container (backward-compatible)
-      return container.resolve(SupabaseProvider);
     default: {
       const exhaustiveCheck: never = providerType;
       throw new McpError(

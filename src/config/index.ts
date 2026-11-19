@@ -170,7 +170,7 @@ const ConfigSchema = z.object({
     z.enum(['minimal', 'standard', 'full']).default('standard'),
   ),
   mcpHttpPort: z.coerce.number().int().min(1).max(65535).default(3015),
-  mcpHttpHost: z.string().default('127.0.0.1'),
+  mcpHttpHost: z.literal('127.0.0.1').default('127.0.0.1'),
   mcpHttpEndpointPath: z.string().default('/mcp'),
   mcpHttpMaxPortRetries: z.coerce.number().default(15),
   mcpHttpPortRetryDelayMs: z.coerce.number().default(50),
@@ -228,33 +228,10 @@ const ConfigSchema = z.object({
     ),
   mcpAuthMode: z.preprocess(
     emptyStringAsUndefined,
-    z.enum(['jwt', 'oauth', 'none']).default('none'),
+    z.enum(['jwt', 'none']).default('none'),
   ),
-  oauthIssuerUrl: z.string().url().optional(),
-  oauthJwksUri: z.string().url().optional(),
-  oauthAudience: z.string().optional(),
-  oauthJwksCooldownMs: z.coerce.number().default(300_000), // 5 minutes
-  oauthJwksTimeoutMs: z.coerce.number().default(5_000), // 5 seconds
-  mcpServerResourceIdentifier: z.string().url().optional(), // RFC 8707 resource indicator
   devMcpClientId: z.string().optional(),
   devMcpScopes: z.array(z.string()).optional(),
-  oauthProxy: z
-    .object({
-      authorizationUrl: z.string().url().optional(),
-      tokenUrl: z.string().url().optional(),
-      revocationUrl: z.string().url().optional(),
-      issuerUrl: z.string().url().optional(),
-      serviceDocumentationUrl: z.string().url().optional(),
-      defaultClientRedirectUris: z.array(z.string()).optional(),
-    })
-    .optional(),
-  supabase: z
-    .object({
-      url: z.string().url(),
-      anonKey: z.string(),
-      serviceRoleKey: z.string().optional(),
-    })
-    .optional(),
   storage: z.object({
     providerType: z
       .preprocess(
@@ -270,7 +247,7 @@ const ConfigSchema = z.object({
           }
           return str;
         },
-        z.enum(['in-memory', 'filesystem', 'supabase']),
+        z.enum(['in-memory', 'filesystem']),
       )
       .default('in-memory'),
     filesystemPath: z.preprocess(
@@ -364,9 +341,12 @@ const ConfigSchema = z.object({
           .transform((roots) => [
             ...new Set(roots.map((root) => path.resolve(root))),
           ])
-          .refine((roots) => roots.every((root) => path.dirname(root) !== root), {
-            message: 'GIT_BASE_DIR must not include a filesystem root',
-          })
+          .refine(
+            (roots) => roots.every((root) => path.dirname(root) !== root),
+            {
+              message: 'GIT_BASE_DIR must not include a filesystem root',
+            },
+          )
           .optional(),
       ),
       maxCommandTimeoutMs: z.coerce
@@ -489,36 +469,8 @@ const parseConfig = () => {
     mcpAuthClockToleranceSeconds: env.MCP_AUTH_CLOCK_TOLERANCE_SECONDS,
     mcpRepositoryGrants: env.MCP_REPOSITORY_GRANTS,
     mcpAuthMode: env.MCP_AUTH_MODE,
-    oauthIssuerUrl: env.OAUTH_ISSUER_URL,
-    oauthJwksUri: env.OAUTH_JWKS_URI,
-    oauthAudience: env.OAUTH_AUDIENCE,
-    oauthJwksCooldownMs: env.OAUTH_JWKS_COOLDOWN_MS,
-    oauthJwksTimeoutMs: env.OAUTH_JWKS_TIMEOUT_MS,
-    mcpServerResourceIdentifier: env.MCP_SERVER_RESOURCE_IDENTIFIER,
     devMcpClientId: env.DEV_MCP_CLIENT_ID,
     devMcpScopes: env.DEV_MCP_SCOPES?.split(',').map((s) => s.trim()),
-    oauthProxy:
-      env.OAUTH_PROXY_AUTHORIZATION_URL || env.OAUTH_PROXY_TOKEN_URL
-        ? {
-            authorizationUrl: env.OAUTH_PROXY_AUTHORIZATION_URL,
-            tokenUrl: env.OAUTH_PROXY_TOKEN_URL,
-            revocationUrl: env.OAUTH_PROXY_REVOCATION_URL,
-            issuerUrl: env.OAUTH_PROXY_ISSUER_URL,
-            serviceDocumentationUrl: env.OAUTH_PROXY_SERVICE_DOCUMENTATION_URL,
-            defaultClientRedirectUris:
-              env.OAUTH_PROXY_DEFAULT_CLIENT_REDIRECT_URIS?.split(',')
-                .map((uri) => uri.trim())
-                .filter(Boolean),
-          }
-        : undefined,
-    supabase:
-      env.SUPABASE_URL && env.SUPABASE_ANON_KEY
-        ? {
-            url: env.SUPABASE_URL,
-            anonKey: env.SUPABASE_ANON_KEY,
-            serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
-          }
-        : undefined,
     storage: {
       providerType: env.STORAGE_PROVIDER_TYPE,
       filesystemPath: env.STORAGE_FILESYSTEM_PATH,

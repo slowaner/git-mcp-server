@@ -1,7 +1,7 @@
 /**
  * @fileoverview Defines the core interface for a generic storage provider.
- * This contract ensures that any storage implementation (e.g., in-memory, filesystem, database)
- * can be used interchangeably throughout the application.
+ * This contract lets the application use either local storage implementation
+ * through the same interface.
  * @module src/storage/core/IStorageProvider
  */
 import type { RequestContext } from '@/utils/index.js';
@@ -13,7 +13,6 @@ import type { RequestContext } from '@/utils/index.js';
  *   Provider-specific behaviors:
  *   - `in-memory`: TTL enforced by `setTimeout` for proactive deletion.
  *   - `filesystem`: TTL stored in a metadata envelope; expired items are filtered on `get()` and `list()`.
- *   - `supabase`: TTL managed via an `expires_at` column; expired rows are handled by database queries.
  */
 export interface StorageOptions {
   /**

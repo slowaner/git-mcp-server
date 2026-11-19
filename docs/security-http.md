@@ -1,13 +1,13 @@
 # HTTP trust and resource limits
 
-HTTP rejects unapproved Host and Origin headers before authentication or body
-access. `MCP_HTTP_ALLOWED_HOSTS` is a comma-separated list of exact authorities,
-including ports and IPv6 brackets, for example `git.example:443,[::1]:3015`.
+The HTTP listener binds to `127.0.0.1`. It rejects unapproved Host and Origin
+headers before authentication or body access. `MCP_HTTP_ALLOWED_HOSTS` is a
+comma-separated list of exact authorities, including ports and IPv6 brackets,
+for example `git.example:443,[::1]:3015`.
 Use the canonical authority (`git.example` for the default HTTP port). Without
 this setting only `localhost`, `127.0.0.1` and `[::1]` at the actual listening port
-are accepted. Wildcard bind addresses do not extend this allowlist.
-Configured DNS names and IPv6 authorities are canonicalized to lowercase; ports
-remain exact. Wildcards are not accepted as configured authorities.
+are accepted. Configured DNS names and IPv6 authorities are canonicalized to
+lowercase, and ports remain exact. Configured authorities must be explicit.
 
 `MCP_ALLOWED_ORIGINS` contains exact HTTP(S) origins, without paths or wildcards.
 An empty list disables browser clients. Foreign and `null` origins are rejected;
@@ -100,9 +100,8 @@ timeout uses the larger of the request and stream deadlines.
 `httpPrincipalKey()` is the identity adapter for admission. Only authenticated
 middleware context supplies its tuple; no token, caller header, body field or
 forwarded address is an admission identity. All anonymous clients share one
-budget. This HTTP foundation does not itself add tenant repository ACLs or session
-owner authorization. Deployments requiring those properties also need the auth
-and session isolation remediation in the dependent security stack.
+budget. In JWT mode, repository grants and session ownership follow the verified
+principal. See [authentication and sessions](security/auth-sessions.md).
 
 ## Locked runtime dependencies
 

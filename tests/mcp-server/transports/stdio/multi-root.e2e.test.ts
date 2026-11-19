@@ -87,7 +87,9 @@ describe('stdio multi-root paths', () => {
     if (root) rmSync(root, { recursive: true, force: true });
   });
 
-  it('sets a relative repository against the first root and reuses it', async () => {
+  it('lists tools and uses a relative repository against the first root', async () => {
+    const { tools } = await client.listTools();
+    expect(tools.map(({ name }) => name)).toContain('git_status');
     const result = await call('git_set_working_dir', { path: 'repo' });
     expect(result.path).toBe(repo);
     await call('git_status', { path: '.' });

@@ -5,7 +5,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { createClient } from '@supabase/supabase-js';
 import { SignJWT } from 'jose';
 import { container } from 'tsyringe';
 import {
@@ -39,11 +38,10 @@ import { allToolDefinitions } from '@/mcp-server/tools/definitions/index.js';
 import type { ToolDefinition } from '@/mcp-server/tools/utils/toolDefinition.js';
 import { z } from 'zod';
 import { CliGitProvider } from '@/services/git/providers/cli/CliGitProvider.js';
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { StorageService } from '@/storage/core/StorageService.js';
 import { SessionWorkingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { InMemoryProvider } from '@/storage/providers/inMemory/inMemoryProvider.js';
-import { SupabaseProvider } from '@/storage/providers/supabase/supabaseProvider.js';
-import type { Database } from '@/storage/providers/supabase/supabase.types.js';
 import {
   currentPrincipal,
   currentServerSessionId,
@@ -606,11 +604,11 @@ suite('authenticated actual HTTP session and repository isolation', () => {
   );
 
   it.each([
-    'database cancellation',
-    'gateway error',
+    'confirmed failure',
+    'unconfirmed write',
     'client deadline',
   ] as const)(
-    'closes a session after a Supabase write ends with %s',
+    'closes a session after a storage write ends with %s',
     async (outcome) => {
       const authenticated = app;
       const security = config.httpSecurity;
@@ -619,43 +617,33 @@ suite('authenticated actual HTTP session and repository isolation', () => {
       const writeStarted = new Promise<AbortSignal>((resolve) => {
         reportWrite = resolve;
       });
-      let replyToWrite!: (response: Response) => void;
-      const storageReply = new Promise<Response>((resolve) => {
-        replyToWrite = resolve;
+      let finishWrite!: () => void;
+      const storageReply = new Promise<void>((resolve) => {
+        finishWrite = resolve;
       });
-      const fetchStorage = Object.assign(
-        async (...[, options]: Parameters<typeof globalThis.fetch>) => {
-          if (options?.method === 'DELETE') {
-            events.push('delete');
-            return new Response(null, { status: 204 });
-          }
-          if (options?.method !== 'POST' || !options.signal) {
-            throw new Error('Expected a cancellable storage upsert');
-          }
-          reportWrite(options.signal);
-          // Keep the write pending even when the client stops waiting.
-          const response = await storageReply;
-          events.push('write reply');
-          return response;
-        },
-        { preconnect: vi.fn() },
-      );
-      const supabase = createClient<Database, 'public'>(
-        'https://storage.example.test',
-        'synthetic-storage-service-key',
-        {
-          auth: { persistSession: false, autoRefreshToken: false },
-          global: { fetch: fetchStorage },
-        },
-      );
-      const backend = new StorageService(new SupabaseProvider(supabase));
-      // Use the same StorageService instance for tool calls and app cleanup.
       const set = vi
         .spyOn(storage, 'set')
-        .mockImplementation(backend.set.bind(backend));
+        .mockImplementation(async (_key, _value, _context, options) => {
+          if (!options?.signal)
+            throw new Error('Expected a cancellable storage write');
+          reportWrite(options.signal);
+          await storageReply;
+          events.push('write reply');
+          if (outcome === 'confirmed failure')
+            throw new Error('Synthetic storage write failure');
+          if (outcome === 'unconfirmed write')
+            throw new McpError(
+              JsonRpcErrorCode.InternalError,
+              'Synthetic unconfirmed storage write',
+              { writeOutcome: 'unknown' },
+            );
+        });
       const remove = vi
         .spyOn(storage, 'delete')
-        .mockImplementation(backend.delete.bind(backend));
+        .mockImplementation(async () => {
+          events.push('delete');
+          return true;
+        });
       const controller = new AbortController();
       const requests: Promise<Response>[] = [];
       let isolated: ReturnType<typeof createHttpApp> | undefined;
@@ -688,11 +676,11 @@ suite('authenticated actual HTTP session and repository isolation', () => {
         const signal = await Promise.race([
           writeStarted,
           write.then(() => {
-            throw new Error('The Supabase write did not start');
+            throw new Error('The storage write did not start');
           }),
         ]);
-        if (outcome === 'gateway error') {
-          replyToWrite(new Response('Gateway Timeout', { status: 504 }));
+        if (outcome === 'unconfirmed write') {
+          finishWrite();
           const response = await write;
           expect(response.status).toBe(200);
           expect(await response.json()).toMatchObject({
@@ -711,31 +699,21 @@ suite('authenticated actual HTTP session and repository isolation', () => {
         const termination = request(alice, sid, 'DELETE');
         requests.push(termination);
 
-        if (outcome === 'database cancellation') {
-          replyToWrite(
-            Response.json(
-              {
-                code: '57014',
-                message: 'canceling statement due to statement timeout',
-              },
-              { status: 500 },
-            ),
-          );
-        }
+        if (outcome === 'confirmed failure') finishWrite();
 
         expect((await termination).status).toBe(200);
         expect(signal.aborted).toBe(outcome === 'client deadline');
         expect(events).toEqual(
-          outcome === 'database cancellation'
+          outcome === 'confirmed failure'
             ? ['write reply', 'delete']
-            : outcome === 'gateway error'
+            : outcome === 'unconfirmed write'
               ? ['write reply']
               : [],
         );
         const replacement = await initialize(alice);
         expect(replacement).not.toBe(sid);
       } finally {
-        replyToWrite(new Response(null, { status: 204 }));
+        finishWrite();
         controller.abort();
         await Promise.allSettled(requests);
         remove.mockRestore();
@@ -748,7 +726,7 @@ suite('authenticated actual HTTP session and repository isolation', () => {
     30_000,
   );
 
-  it('limits closing sessions and aborts a slow Supabase cleanup at the deadline', async () => {
+  it('limits closing sessions and aborts slow storage cleanup at the deadline', async () => {
     const authenticated = app;
     const security = config.httpSecurity;
     let reportDelete!: (signal: AbortSignal) => void;
@@ -756,31 +734,21 @@ suite('authenticated actual HTTP session and repository isolation', () => {
       reportDelete = resolve;
     });
     let holdDelete = true;
-    const fetchStorage = Object.assign(
-      async (...[, options]: Parameters<typeof globalThis.fetch>) => {
-        if (!holdDelete) return new Response(null, { status: 204 });
+    const originalDelete = storage.delete.bind(storage);
+    const remove = vi
+      .spyOn(storage, 'delete')
+      .mockImplementation(async (key, context, signal) => {
+        if (!holdDelete) return originalDelete(key, context, signal);
         holdDelete = false;
-        const signal = options?.signal;
-        if (!signal || options?.method !== 'DELETE')
-          throw new Error('Expected a cancellable storage delete');
+        if (!signal) throw new Error('Expected a cancellable storage delete');
         signal.throwIfAborted();
-        return new Promise<Response>((_resolve, reject) => {
+        return new Promise<boolean>((_resolve, reject) => {
           signal.addEventListener('abort', () => reject(signal.reason), {
             once: true,
           });
           reportDelete(signal);
         });
-      },
-      { preconnect: vi.fn() },
-    );
-    const supabase = createClient<Database, 'public'>(
-      'https://storage.example.test',
-      'synthetic-storage-service-key',
-      {
-        auth: { persistSession: false, autoRefreshToken: false },
-        global: { fetch: fetchStorage },
-      },
-    );
+      });
     let isolated: ReturnType<typeof createHttpApp> | undefined;
     let termination: Promise<Response> | undefined;
     try {
@@ -790,10 +758,6 @@ suite('authenticated actual HTTP session and repository isolation', () => {
         maxSessionsPerPrincipal: 1,
         requestTimeoutMs: 1_000,
       };
-      container.registerInstance(
-        StorageToken,
-        new StorageService(new SupabaseProvider(supabase)),
-      );
       app = isolated = createHttpApp(
         makeServer,
         requestContextService.createRequestContext(),
@@ -817,7 +781,7 @@ suite('authenticated actual HTTP session and repository isolation', () => {
     } finally {
       await termination?.catch(() => {});
       if (isolated) await closeHttpApp(isolated);
-      container.registerInstance(StorageToken, storage);
+      remove.mockRestore();
       app = authenticated;
       config.httpSecurity = security;
     }
