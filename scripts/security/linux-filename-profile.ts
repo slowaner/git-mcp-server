@@ -53,7 +53,6 @@ export async function verifyLinuxFilenameProfile(): Promise<void> {
     mkdirSync(home, { mode: 0o700 });
     const env = buildTrustedGitEnvironment(
       {
-        profile: 'trusted',
         binaryPath: '/usr/bin/git',
         homeDirectory: home,
         helperPath: '/usr/bin:/bin',
@@ -94,7 +93,6 @@ export async function verifyLinuxFilenameProfile(): Promise<void> {
       { mode: 0o700 },
     );
     Object.assign(config.git, {
-      executionProfile: 'trusted',
       binaryPath: binary,
       trustedHome: home,
       trustedPath: '/usr/bin:/bin',

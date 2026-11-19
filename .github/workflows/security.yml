@@ -154,4 +154,21 @@ jobs:
           upload: never
           upload-database: false
       - name: Require complete analysis and enforce High/Critical results
+        id: codeql-gate
         run: bun scripts/check-sarif.ts "${{ runner.temp }}/codeql-results/javascript.sarif"
+      - name: Print CodeQL rule and source locations for failed analysis
+        if: failure() && steps.codeql-gate.outcome == 'failure'
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/codeql-results/javascript.sarif"
+          test -f "$report" || exit 0
+          jq -c '
+            [.runs[]?.results[]? | {
+              rule: (.ruleId // .rule.id // "" | strings | select(test("^js/[a-z0-9-]+(/[a-z0-9-]+)?$"))),
+              path: (.locations[0].physicalLocation.artifactLocation.uri // "" | strings |
+                select(test("^(src|scripts|tests)/([a-zA-Z0-9_.-]+/)*[a-zA-Z0-9_.-]+\\.(ts|js|mjs|cjs)$")) |
+                select(split("/") | all(. != "." and . != "..")) // null),
+              line: (.locations[0].physicalLocation.region.startLine // 0 | numbers | select(. >= 0 and . <= 1000000))
+            }][:30][]
+          ' "$report"

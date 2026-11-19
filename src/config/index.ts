@@ -2,8 +2,7 @@
  * @fileoverview Loads, validates, and exports application configuration.
  * This module centralizes configuration management, sourcing values from
  * environment variables. It uses Zod for schema validation to ensure type safety
- * and correctness of configuration parameters, and is designed to be
- * environment-agnostic (e.g., Node.js, Cloudflare Workers).
+ * and correctness of configuration parameters for the Node.js and Bun servers.
  *
  * @module src/config/index
  */
@@ -171,7 +170,7 @@ const ConfigSchema = z.object({
     z.enum(['minimal', 'standard', 'full']).default('standard'),
   ),
   mcpHttpPort: z.coerce.number().int().min(1).max(65535).default(3015),
-  mcpHttpHost: z.string().default('127.0.0.1'),
+  mcpHttpHost: z.literal('127.0.0.1').default('127.0.0.1'),
   mcpHttpEndpointPath: z.string().default('/mcp'),
   mcpHttpMaxPortRetries: z.coerce.number().default(15),
   mcpHttpPortRetryDelayMs: z.coerce.number().default(50),
@@ -229,33 +228,10 @@ const ConfigSchema = z.object({
     ),
   mcpAuthMode: z.preprocess(
     emptyStringAsUndefined,
-    z.enum(['jwt', 'oauth', 'none']).default('none'),
+    z.enum(['jwt', 'none']).default('none'),
   ),
-  oauthIssuerUrl: z.string().url().optional(),
-  oauthJwksUri: z.string().url().optional(),
-  oauthAudience: z.string().optional(),
-  oauthJwksCooldownMs: z.coerce.number().default(300_000), // 5 minutes
-  oauthJwksTimeoutMs: z.coerce.number().default(5_000), // 5 seconds
-  mcpServerResourceIdentifier: z.string().url().optional(), // RFC 8707 resource indicator
   devMcpClientId: z.string().optional(),
   devMcpScopes: z.array(z.string()).optional(),
-  oauthProxy: z
-    .object({
-      authorizationUrl: z.string().url().optional(),
-      tokenUrl: z.string().url().optional(),
-      revocationUrl: z.string().url().optional(),
-      issuerUrl: z.string().url().optional(),
-      serviceDocumentationUrl: z.string().url().optional(),
-      defaultClientRedirectUris: z.array(z.string()).optional(),
-    })
-    .optional(),
-  supabase: z
-    .object({
-      url: z.string().url(),
-      anonKey: z.string(),
-      serviceRoleKey: z.string().optional(),
-    })
-    .optional(),
   storage: z.object({
     providerType: z
       .preprocess(
@@ -271,13 +247,7 @@ const ConfigSchema = z.object({
           }
           return str;
         },
-        z.enum([
-          'in-memory',
-          'filesystem',
-          'supabase',
-          'cloudflare-r2',
-          'cloudflare-kv',
-        ]),
+        z.enum(['in-memory', 'filesystem']),
       )
       .default('in-memory'),
     filesystemPath: z.preprocess(
@@ -287,14 +257,6 @@ const ConfigSchema = z.object({
   }),
   git: z
     .object({
-      executionProfile: z
-        .preprocess(
-          emptyStringAsUndefined,
-          z.enum(['restricted', 'trusted']).default('restricted'),
-        )
-        .describe(
-          'Explicit Git trust profile; restricted requires a verified OS sandbox and otherwise rejects execution.',
-        ),
       binaryPath: z
         .preprocess(
           emptyStringAsUndefined,
@@ -319,7 +281,7 @@ const ConfigSchema = z.object({
             ),
         )
         .describe(
-          'Operator-owned HOME for explicitly trusted native configuration and signing.',
+          'Operator-owned HOME for native Git configuration and signing.',
         ),
       trustedPath: z
         .preprocess(
@@ -336,7 +298,7 @@ const ConfigSchema = z.object({
               'Every trusted helper PATH directory must be absolute.',
             ),
         )
-        .describe('Explicit helper search path for the trusted Git profile.'),
+        .describe('Search path for native Git helper programs.'),
       provider: z.preprocess(
         emptyStringAsUndefined,
         z.enum(['auto', 'cli', 'isomorphic']).default('auto'),
@@ -379,6 +341,12 @@ const ConfigSchema = z.object({
           .transform((roots) => [
             ...new Set(roots.map((root) => path.resolve(root))),
           ])
+          .refine(
+            (roots) => roots.every((root) => path.dirname(root) !== root),
+            {
+              message: 'GIT_BASE_DIR must not include a filesystem root',
+            },
+          )
           .optional(),
       ),
       maxCommandTimeoutMs: z.coerce
@@ -386,7 +354,7 @@ const ConfigSchema = z.object({
         .int()
         .min(1)
         .max(2147483647)
-        .default(30000)
+        .default(60000)
         .describe('Total native Git operation deadline in milliseconds.'),
       maxBufferSizeMb: z.coerce
         .number()
@@ -439,27 +407,6 @@ const ConfigSchema = z.object({
     enabled: z.coerce.boolean().default(false),
     serviceName: z.string(),
     serviceVersion: z.string(),
-    tracesEndpoint: z.string().url().optional(),
-    metricsEndpoint: z.string().url().optional(),
-    samplingRatio: z.coerce.number().default(1.0),
-    logLevel: z
-      .preprocess(
-        (val) => {
-          const str = emptyStringAsUndefined(val);
-          if (typeof str === 'string') {
-            const lower = str.toLowerCase();
-            const aliasMap: Record<string, string> = {
-              err: 'ERROR',
-              warning: 'WARN',
-              information: 'INFO',
-            };
-            return aliasMap[lower] ?? str.toUpperCase();
-          }
-          return str;
-        },
-        z.enum(['NONE', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'VERBOSE', 'ALL']),
-      )
-      .default('INFO'),
   }),
 });
 
@@ -522,36 +469,8 @@ const parseConfig = () => {
     mcpAuthClockToleranceSeconds: env.MCP_AUTH_CLOCK_TOLERANCE_SECONDS,
     mcpRepositoryGrants: env.MCP_REPOSITORY_GRANTS,
     mcpAuthMode: env.MCP_AUTH_MODE,
-    oauthIssuerUrl: env.OAUTH_ISSUER_URL,
-    oauthJwksUri: env.OAUTH_JWKS_URI,
-    oauthAudience: env.OAUTH_AUDIENCE,
-    oauthJwksCooldownMs: env.OAUTH_JWKS_COOLDOWN_MS,
-    oauthJwksTimeoutMs: env.OAUTH_JWKS_TIMEOUT_MS,
-    mcpServerResourceIdentifier: env.MCP_SERVER_RESOURCE_IDENTIFIER,
     devMcpClientId: env.DEV_MCP_CLIENT_ID,
     devMcpScopes: env.DEV_MCP_SCOPES?.split(',').map((s) => s.trim()),
-    oauthProxy:
-      env.OAUTH_PROXY_AUTHORIZATION_URL || env.OAUTH_PROXY_TOKEN_URL
-        ? {
-            authorizationUrl: env.OAUTH_PROXY_AUTHORIZATION_URL,
-            tokenUrl: env.OAUTH_PROXY_TOKEN_URL,
-            revocationUrl: env.OAUTH_PROXY_REVOCATION_URL,
-            issuerUrl: env.OAUTH_PROXY_ISSUER_URL,
-            serviceDocumentationUrl: env.OAUTH_PROXY_SERVICE_DOCUMENTATION_URL,
-            defaultClientRedirectUris:
-              env.OAUTH_PROXY_DEFAULT_CLIENT_REDIRECT_URIS?.split(',')
-                .map((uri) => uri.trim())
-                .filter(Boolean),
-          }
-        : undefined,
-    supabase:
-      env.SUPABASE_URL && env.SUPABASE_ANON_KEY
-        ? {
-            url: env.SUPABASE_URL,
-            anonKey: env.SUPABASE_ANON_KEY,
-            serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
-          }
-        : undefined,
     storage: {
       providerType: env.STORAGE_PROVIDER_TYPE,
       filesystemPath: env.STORAGE_FILESYSTEM_PATH,
@@ -577,7 +496,6 @@ const parseConfig = () => {
         undefined,
       wrapupInstructionsPath: env.GIT_WRAPUP_INSTRUCTIONS_PATH,
       baseDirs: env.GIT_BASE_DIR,
-      executionProfile: env.GIT_EXECUTION_PROFILE,
       binaryPath: env.GIT_BINARY_PATH,
       trustedHome: env.GIT_TRUSTED_HOME,
       trustedPath: env.GIT_TRUSTED_PATH,
@@ -592,10 +510,6 @@ const parseConfig = () => {
       enabled: env.OTEL_ENABLED,
       serviceName: env.OTEL_SERVICE_NAME,
       serviceVersion: env.OTEL_SERVICE_VERSION,
-      tracesEndpoint: env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
-      metricsEndpoint: env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
-      samplingRatio: env.OTEL_TRACES_SAMPLER_ARG,
-      logLevel: env.OTEL_LOG_LEVEL,
     },
     // The following fields will be derived and are not directly from env
     mcpServerName: env.MCP_SERVER_NAME,

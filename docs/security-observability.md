@@ -1,7 +1,7 @@
 # Security observability contract
 
-The logger, error handler, tool performance wrapper and OpenTelemetry exporters
-emit allowlisted operational metadata. Request payloads, commit messages,
+The logger, error handler and tool performance wrapper emit allowlisted
+operational metadata locally. Request payloads, commit messages,
 repository text, token claims, credentials, raw session identifiers and exception
 messages/stacks/causes are excluded. This policy also applies at debug level and
 to interaction logging. Existing payload-debug settings do not enable raw data
@@ -17,47 +17,19 @@ timestamp fields remain available.
 
 Request, session, tenant, principal, repository and trace correlation fields use
 domain-separated HMACs with a random process-local key. These identifiers are
-stable within one server process and change after restart. The key is not
-exported. Trace spans contain `audit.trace_correlation`, which matches the log's
-`traceCorrelation` for that trace in the same process.
+stable within one server process and change after restart. The correlation key
+stays in process memory.
 
 Consumers that previously indexed `requestId`, `sessionId`, `testId`, raw `msg`,
 `err`, `input`, `auth` or arbitrary context properties must migrate to the safe
 event, operation and correlation fields. Error details returned to an authorized
 tool caller remain separate from the observability schema.
 
-## Traces, metrics and diagnostics
+## Local output
 
-Exported spans retain standard trace/span identifiers, timing, outcome and
-allowlisted numeric metrics. Exception events, status message text, links,
-tracestate, arbitrary attributes, instrumentation scope metadata and auto-detected
-host/process resources are excluded. Tool names outside the known operation set
-are represented as `internal_operation`.
-
-The exported service name is `git-mcp-server`; arbitrary resource and scope
-versions are omitted. The logger's version uses bounded version syntax.
-Pino automatic log sending/correlation is disabled so it
-cannot append fields around the logger boundary. Diagnostic console output uses
-fixed, rate-limited event names on stderr; exporter URLs and failure details do
-not become diagnostic messages.
-
-Metrics export is restricted to `http.server.request.duration` and
-`http.client.request.duration` explicit histograms from the server and the
-HTTP/Undici instrumentation. Method (a fixed HTTP method set) and numeric
-status (`100`–`599`) are the only request-derived metric dimensions. The SDK's
-boolean `otel.metric.overflow` marker remains visible when its 2,000-series
-cardinality limit aggregates further combinations. The SDK applies this policy
-before aggregation so private hosts, routes, error names and identifiers cannot
-create separate exported series. The export boundary reconstructs the resource,
-scope, descriptor, timestamps and numeric histogram; extra fields and exemplars
-are excluded. Unsupported streams are omitted; malformed known streams fail the
-batch with a fixed diagnostic. Limits are 256 scopes, 256 streams per scope,
-2,000 points per stream and 64 bucket boundaries. An export failure does not
-produce a partial or truncated result.
-
-Custom direct console writers or exporters outside these components must enforce
-their own equivalent policy. A sink schema is not an authorization boundary and
-does not make repository-provided instructions trustworthy.
+The standalone server writes structured logs locally. Pino automatic
+OpenTelemetry integration is disabled. Embedded runtimes can attach their own
+instrumentation through the OpenTelemetry API.
 
 ## Payload-size metadata
 

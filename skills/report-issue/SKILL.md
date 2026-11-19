@@ -15,8 +15,8 @@ Typical triggers:
 - A git tool handler returns wrong results or throws on valid input
 - A git provider (`CliGitProvider`) fails or misbehaves — wrong output parsing, error transformation, timeout handling
 - Transport bugs — HTTP (Hono + Streamable HTTP), stdio, SSE framing, session handling
-- Auth bugs — JWT / OAuth / scope enforcement
-- Storage backend misbehaves — in-memory, filesystem, supabase, cloudflare
+- Auth bugs — JWT / scope enforcement
+- Storage backend misbehaves — in-memory or filesystem
 - Domain logic errors — wrong git output, missing edge cases, bad state transitions
 - Resource handlers return stale, incomplete, or incorrect data
 - Missing or incorrect `.describe()` on schema fields causing poor LLM tool use

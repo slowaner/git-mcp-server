@@ -75,7 +75,6 @@ describe('production integrity consumers', { timeout: 30000 }, () => {
       '[user]\n name = Integrity Fixture\n email = fixture@example.invalid\n[commit]\n gpgsign = false\n',
     );
     Object.assign(config.git, {
-      executionProfile: 'trusted',
       binaryPath: '/usr/bin/git',
       trustedHome: home,
       trustedPath: '/usr/bin:/bin',
@@ -88,7 +87,6 @@ describe('production integrity consumers', { timeout: 30000 }, () => {
     });
     env = buildTrustedGitEnvironment(
       {
-        profile: 'trusted',
         binaryPath: '/usr/bin/git',
         homeDirectory: home,
         helperPath: '/usr/bin:/bin',

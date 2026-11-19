@@ -4,30 +4,23 @@ Native Git is a program execution boundary. Repository configuration can start
 hooks, filters, fsmonitor, credential/transport helpers and signing programs.
 Configuration flags alone cannot isolate an untrusted repository.
 
-## Profiles and upgrade behavior
+## Supported platforms and repository trust
 
-| Configuration/platform | Startup and Git behavior | Authority |
-| --- | --- | --- |
-| Unset `GIT_EXECUTION_PROFILE` | Server can start; Git requests reject with `POLICY_UNSUPPORTED` before repository reads, discovery, or destination creation | Default `restricted` |
-| `restricted`, any platform | Rejects before Git or repository filesystem work | No working OS sandbox is supplied |
-| Explicit `trusted`, Node or Bun on macOS/Linux | Enables native Git under the configured operator identity and request limits | Only operator-trusted repositories, configuration and helpers |
-| Explicit `trusted`, other platforms including Windows | Rejects before spawn; no verified process-group/Job Object implementation | Unsupported |
-| Invalid profile, paths or numeric limits | Configuration validation fails at startup | No silent downgrade |
+Native Git runs on macOS and Linux with Node.js or Bun. The server rejects Git
+operations on unsupported platforms before spawning Git. Configuration validation
+rejects invalid paths or numeric limits at startup.
 
-This change does **not** provide a working untrusted-repository sandbox. Do not
-enable `trusted` to host malicious or tenant-controlled repositories. Native
-global/system configuration and their includes, repository hooks/filters/helpers,
-SSH agent and signing keyring remain operator authority. Trusted mode makes no
-filesystem, RCE, network-egress or parent-path race confinement guarantee.
-Application canonical-root and tenant authorization checks still apply; selecting
-trusted mode does not grant a root/tenant exemption. Repository metadata and
-effective configuration authorization are separate gates in the remediation stack.
+Use this server with repositories and Git configuration you trust to run with
+the operator's OS permissions. Native global and system configuration and their
+includes, hooks, filters, helpers, SSH agent and signing keyring retain that
+authority. The server checks request paths against the configured root allowlist.
+An OS sandbox is required to run Git against untrusted repositories. Canonical
+repository metadata and effective configuration authorization are separate gates
+in the remediation stack.
 
-Existing installations must explicitly opt in only after establishing operator
-trust. Example for a POSIX installation whose Git is `/usr/bin/git`:
+Example operator environment for a POSIX installation:
 
 ```sh
-GIT_EXECUTION_PROFILE=trusted
 GIT_BINARY_PATH=/usr/bin/git
 GIT_TRUSTED_HOME=/absolute/operator/home
 GIT_TRUSTED_PATH=/usr/bin:/bin
@@ -46,8 +39,7 @@ preloads **before application code**. Use an operator-owned launch cwd/config an
 `--no-env-file` when relying only on the supplied environment. That flag disables
 automatic env loading; it does not neutralize a malicious preload. The application
 cannot attest or contain runtime behavior that precedes it. Do not launch the
-server from a repository-controlled cwd or treat restricted Git as a startup
-sandbox. Bun's pinned [environment loading documentation](https://github.com/oven-sh/bun/blob/c6da4a4d3010e5553438c60f6bd76d981976867c/docs/runtime/environment-variables.mdx)
+server from a repository-controlled cwd. Bun's pinned [environment loading documentation](https://github.com/oven-sh/bun/blob/c6da4a4d3010e5553438c60f6bd76d981976867c/docs/runtime/environment-variables.mdx)
 and [runtime preload documentation](https://github.com/oven-sh/bun/blob/c6da4a4d3010e5553438c60f6bd76d981976867c/docs/runtime/bunfig.mdx)
 describe these separate pre-entry authorities. No launcher, package script or
 runtime-wide configuration is changed here.
@@ -57,7 +49,7 @@ HOME must be absolute; every helper PATH entry must be absolute and nonempty.
 Git is never selected from inherited PATH. Inherited `GIT_*` routing/config,
 loader variables and unrelated server credentials are excluded. Explicit Git
 author/committer configuration is applied separately. Operator SSH agent,
-GNUPGHOME, proxy and certificate settings are retained in trusted mode. Native
+GNUPGHOME, proxy and certificate settings are retained. Native
 signing and hooks remain enabled according to that controlled native environment;
 `GIT_SIGN_COMMITS=false` leaves native signing configuration in control.
 
@@ -65,7 +57,7 @@ signing and hooks remain enabled according to that controlled native environment
 
 | Variable | Default | Valid bounds |
 | --- | --- | --- |
-| `GIT_MAX_COMMAND_TIMEOUT_MS` | 30000 | Integer 1..2147483647 |
+| `GIT_MAX_COMMAND_TIMEOUT_MS` | 60000 | Integer 1..2147483647 |
 | `GIT_MAX_BUFFER_SIZE_MB` | 10 | Integer 1..128; legacy aggregate MiB fallback |
 | `GIT_MAX_OUTPUT_BYTES` | Legacy MiB setting in bytes | Integer 1..134217728 |
 | `GIT_MAX_STDOUT_BYTES` | Aggregate byte cap | Integer 1..134217728 per process |
@@ -96,10 +88,10 @@ A fixed bundled bootstrap anchors a POSIX process group, uses a bounded private
 control descriptor not inherited by Git, and reports Git's real exit separately.
 Termination escalates from TERM to one final KILL while the anchor is live;
 settlement waits for stream/group cleanup. Permission failures and unexpected
-anchor loss are `CLEANUP_FAILED`, never success. The anchor is never signaled after
+anchor loss are `CLEANUP_FAILED`. This failure takes precedence over an earlier
+deadline or cancellation. The anchor is never signaled after
 exit or by a reused/unrelated PGID. A deliberately detached session escapes a
-process group; trusted programs must not detach. Group supervision is not a
-replacement for the missing restricted OS sandbox.
+process group. Operator-trusted programs must remain in the supervised group.
 
 Successful internal executor results always have numeric `exitCode`. An ordinary
 nonzero exit may be returned only to internal callers requesting a soft Git exit;

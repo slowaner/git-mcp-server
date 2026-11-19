@@ -1,19 +1,19 @@
 # Git integrity and safety semantics
 
-Git execution and repository access still require the configured execution
-profile, canonical repository roots and verified principal grants. The trusted
-native profile preserves operator Git configuration, hooks and signing agents;
-it is not an operating-system sandbox.
+Git execution uses native Git within the configured repository roots and
+verified principal grants where HTTP authentication is enabled. Native Git
+retains the operator's Git configuration, hooks and signing agents. See
+[Git execution security](security/git-execution.md) for the runtime boundary.
 
 ## Privacy
 
-Logs, interactions, trace exports and metric exports use an allowlisted schema.
-Raw tool arguments, token claims, credential URLs, exception messages/stacks
-and session identifiers are excluded. Process-local keyed correlations retain
-request, session, tenant, principal and repository associations without exporting
-their original values. Event and limiter cardinality are bounded. Object payload
-sizes are reported as unknown instead of serializing the whole payload for
-measurement. Private log files require the documented private directory profile.
+Local logs and interaction records use an allowlisted schema. Raw tool
+arguments, token claims, credential URLs, exception details and session
+identifiers are excluded. Process-local keyed correlations identify related
+requests, sessions, tenants, principals and repositories. Event and limiter
+cardinality are bounded. Object payload sizes are reported as unknown. See the
+[local observability contract](security-observability.md) for log fields and
+file permissions.
 
 ## Push destinations and destructive actions
 

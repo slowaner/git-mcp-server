@@ -58,7 +58,6 @@ describe('immutable show path boundary', { timeout: 30000 }, () => {
     );
     env = buildTrustedGitEnvironment(
       {
-        profile: 'trusted',
         binaryPath: '/usr/bin/git',
         homeDirectory: home,
         helperPath: '/usr/bin:/bin',
@@ -83,7 +82,6 @@ describe('immutable show path boundary', { timeout: 30000 }, () => {
       { mode: 0o700 },
     );
     Object.assign(config.git, {
-      executionProfile: 'trusted',
       binaryPath: binary,
       trustedHome: home,
       trustedPath: '/usr/bin:/bin',

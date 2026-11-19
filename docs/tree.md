@@ -113,8 +113,7 @@ git-mcp-server
 │   │   │   │   │   └── withAuth.ts
 │   │   │   │   ├── strategies
 │   │   │   │   │   ├── authStrategy.ts
-│   │   │   │   │   ├── jwtStrategy.ts
-│   │   │   │   │   └── oauthStrategy.ts
+│   │   │   │   │   └── jwtStrategy.ts
 │   │   │   │   ├── authFactory.ts
 │   │   │   │   ├── authMiddleware.ts
 │   │   │   │   └── index.ts
@@ -193,17 +192,10 @@ git-mcp-server
 │   │   │   ├── StorageService.ts
 │   │   │   └── storageValidation.ts
 │   │   ├── providers
-│   │   │   ├── cloudflare
-│   │   │   │   ├── index.ts
-│   │   │   │   ├── kvProvider.ts
-│   │   │   │   └── r2Provider.ts
 │   │   │   ├── fileSystem
 │   │   │   │   └── fileSystemProvider.ts
-│   │   │   ├── inMemory
-│   │   │   │   └── inMemoryProvider.ts
-│   │   │   └── supabase
-│   │   │       ├── supabase.types.ts
-│   │   │       └── supabaseProvider.ts
+│   │   │   └── inMemory
+│   │   │       └── inMemoryProvider.ts
 │   │   └── index.ts
 │   ├── types-global
 │   │   └── errors.ts
@@ -234,12 +226,10 @@ git-mcp-server
 │   │   │   └── sanitization.ts
 │   │   ├── telemetry
 │   │   │   ├── index.ts
-│   │   │   ├── instrumentation.ts
 │   │   │   ├── semconv.ts
 │   │   │   └── trace.ts
 │   │   └── index.ts
-│   ├── index.ts
-│   └── worker.ts
+│   └── index.ts
 ├── tests
 │   ├── config
 │   │   ├── index.int.test.ts
@@ -359,9 +349,6 @@ git-mcp-server
 │   │                   └── runtime-adapter.test.ts
 │   ├── storage
 │   │   ├── providers
-│   │   │   ├── cloudflare
-│   │   │   │   ├── kvProvider.test.ts
-│   │   │   │   └── r2Provider.test.ts
 │   │   │   └── inMemory
 │   │   │       └── inMemoryProvider.test.ts
 │   │   └── storageProviderCompliance.test.ts
@@ -407,8 +394,7 @@ git-mcp-server
 ├── tsconfig.test.json
 ├── tsdoc.json
 ├── typedoc.json
-├── vitest.config.ts
-└── wrangler.toml
+└── vitest.config.ts
 ```
 
 _Note: This tree excludes files and directories matched by .gitignore and default patterns._

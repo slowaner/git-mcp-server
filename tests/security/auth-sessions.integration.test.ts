@@ -38,7 +38,9 @@ import { allToolDefinitions } from '@/mcp-server/tools/definitions/index.js';
 import type { ToolDefinition } from '@/mcp-server/tools/utils/toolDefinition.js';
 import { z } from 'zod';
 import { CliGitProvider } from '@/services/git/providers/cli/CliGitProvider.js';
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { StorageService } from '@/storage/core/StorageService.js';
+import { SessionWorkingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { InMemoryProvider } from '@/storage/providers/inMemory/inMemoryProvider.js';
 import {
   currentPrincipal,
@@ -102,6 +104,7 @@ suite('authenticated actual HTTP session and repository isolation', () => {
     sid?: string,
     method = 'POST',
     body: unknown = { jsonrpc: '2.0', id: 7, method: 'ping' },
+    signal?: AbortSignal,
   ) {
     return app.request('http://localhost:3015/mcp', {
       method,
@@ -112,6 +115,7 @@ suite('authenticated actual HTTP session and repository isolation', () => {
         ...(method === 'GET' && sid ? { accept: 'text/event-stream' } : {}),
       },
       ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
+      ...(signal ? { signal } : {}),
     });
   }
   async function initialize(auth: string) {
@@ -225,7 +229,6 @@ suite('authenticated actual HTTP session and repository isolation', () => {
       },
       git: {
         ...config.git,
-        executionProfile: 'trusted',
         baseDirs: [first, second],
       },
     });
@@ -400,6 +403,390 @@ suite('authenticated actual HTTP session and repository isolation', () => {
     expect(identity(two).sessionId).toBe(b);
   });
 
+  it('deletes cwd only after a write that was active at close has finished', async () => {
+    const originalSet = storage.set.bind(storage);
+    const originalDelete = storage.delete.bind(storage);
+    const originalClose =
+      WebStandardStreamableHTTPServerTransport.prototype.close;
+    const events: string[] = [];
+    let writing!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      writing = resolve;
+    });
+    let finishWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+    let closed!: () => void;
+    const transportClosed = new Promise<void>((resolve) => {
+      closed = resolve;
+    });
+    const set = vi.spyOn(storage, 'set').mockImplementation(async (...args) => {
+      writing();
+      await writeGate;
+      await originalSet(...args);
+      events.push('write completed');
+    });
+    const remove = vi
+      .spyOn(storage, 'delete')
+      .mockImplementation(async (...args) => {
+        const deleted = await originalDelete(...args);
+        if (deleted) events.push('cwd deleted');
+        return deleted;
+      });
+    const close = vi
+      .spyOn(WebStandardStreamableHTTPServerTransport.prototype, 'close')
+      .mockImplementation(async function (
+        this: WebStandardStreamableHTTPServerTransport,
+      ) {
+        await originalClose.call(this);
+        closed();
+      });
+    const controller = new AbortController();
+    const requests: Promise<Response>[] = [];
+    try {
+      const alice = await token();
+      const sid = await initialize(alice);
+      const write = request(
+        alice,
+        sid,
+        'POST',
+        {
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'tools/call',
+          params: { name: 'git_set_working_dir', arguments: { path: first } },
+        },
+        controller.signal,
+      );
+      requests.push(write);
+      await Promise.race([
+        writeStarted,
+        write.then(() => {
+          throw new Error('The cwd write did not start');
+        }),
+      ]);
+
+      const termination = request(alice, sid, 'DELETE');
+      requests.push(termination);
+      await transportClosed;
+      expect(remove).not.toHaveBeenCalled();
+      controller.abort();
+      finishWrite();
+      expect((await termination).status).toBe(200);
+      expect(events).toEqual(['write completed', 'cwd deleted']);
+    } finally {
+      controller.abort();
+      finishWrite();
+      await Promise.allSettled(requests);
+      close.mockRestore();
+      remove.mockRestore();
+      set.mockRestore();
+    }
+  }, 30_000);
+
+  it.each([8, 0, ''] as const)(
+    'preserves the session and cwd after cancelling a queued clear with request id %j',
+    async (requestId) => {
+      const originalSet = storage.set.bind(storage);
+      let markWriting!: () => void;
+      const writing = new Promise<void>((resolve) => {
+        markWriting = resolve;
+      });
+      let finishWrite!: () => void;
+      const writeGate = new Promise<void>((resolve) => {
+        finishWrite = resolve;
+      });
+      const set = vi
+        .spyOn(storage, 'set')
+        .mockImplementationOnce(async (...args) => {
+          markWriting();
+          await writeGate;
+          await originalSet(...args);
+        });
+      const originalClear =
+        SessionWorkingDirectoryStore.prototype.clearWithPreviousPath;
+      let markQueued!: (entry: { result: Promise<string | null> }) => void;
+      const queued = new Promise<{ result: Promise<string | null> }>(
+        (resolve) => {
+          markQueued = resolve;
+        },
+      );
+      const clear = vi
+        .spyOn(SessionWorkingDirectoryStore.prototype, 'clearWithPreviousPath')
+        .mockImplementationOnce(function (
+          this: SessionWorkingDirectoryStore,
+          ...args
+        ) {
+          const result = originalClear.apply(this, args);
+          markQueued({ result });
+          return result;
+        });
+      const read = vi.spyOn(storage, 'get');
+      const remove = vi.spyOn(storage, 'delete');
+      const authenticated = app;
+      const security = config.httpSecurity;
+      const requestTimeoutMs = 1_500;
+      const requests: Promise<unknown>[] = [];
+      try {
+        config.httpSecurity = { ...security, requestTimeoutMs };
+        app = createHttpApp(
+          makeServer,
+          requestContextService.createRequestContext(),
+        );
+        const alice = await token();
+        const sid = await initialize(alice);
+        const write = call(alice, sid, 'git_set_working_dir', { path: first });
+        requests.push(write);
+        await Promise.race([
+          writing,
+          write.then(() => {
+            throw new Error('The cwd write did not start');
+          }),
+        ]);
+
+        const clearing = request(alice, sid, 'POST', {
+          jsonrpc: '2.0',
+          id: requestId,
+          method: 'tools/call',
+          params: {
+            name: 'git_clear_working_dir',
+            arguments: { confirm: 'yes' },
+          },
+        });
+        requests.push(clearing);
+        const { result } = await Promise.race([
+          queued,
+          clearing.then(() => {
+            throw new Error('The cwd clear did not enter the queue');
+          }),
+        ]);
+        const cancelled = await request(alice, sid, 'POST', {
+          jsonrpc: '2.0',
+          method: 'notifications/cancelled',
+          params: { requestId, reason: 'Fixture cancelled the clear' },
+        });
+        expect(cancelled.status).toBe(202);
+        await cancelled.text();
+
+        finishWrite();
+        accepted(await write);
+        await Promise.allSettled([result]);
+        expect(read).not.toHaveBeenCalled();
+        expect(remove).not.toHaveBeenCalled();
+        const response = await clearing;
+        await new Promise((resolve) =>
+          setTimeout(resolve, requestTimeoutMs + 50),
+        );
+        accepted(await call(alice, sid, 'git_status', { path: '.' }));
+        expect(response.status).toBe(200);
+        expect(response.headers.get('content-type')).toBe('text/event-stream');
+        expect(await response.text()).toBe('');
+        const ping = await request(alice, sid, 'POST', {
+          jsonrpc: '2.0',
+          id: requestId,
+          method: 'ping',
+        });
+        expect(await ping.json()).toMatchObject({ id: requestId, result: {} });
+      } finally {
+        finishWrite();
+        await Promise.allSettled(requests);
+        if (app !== authenticated) await closeHttpApp(app);
+        app = authenticated;
+        config.httpSecurity = security;
+        clear.mockRestore();
+        read.mockRestore();
+        remove.mockRestore();
+        set.mockRestore();
+      }
+    },
+    30_000,
+  );
+
+  it.each([
+    'confirmed failure',
+    'unconfirmed write',
+    'client deadline',
+  ] as const)(
+    'closes a session after a storage write ends with %s',
+    async (outcome) => {
+      const authenticated = app;
+      const security = config.httpSecurity;
+      const events: string[] = [];
+      let reportWrite!: (signal: AbortSignal) => void;
+      const writeStarted = new Promise<AbortSignal>((resolve) => {
+        reportWrite = resolve;
+      });
+      let finishWrite!: () => void;
+      const storageReply = new Promise<void>((resolve) => {
+        finishWrite = resolve;
+      });
+      const set = vi
+        .spyOn(storage, 'set')
+        .mockImplementation(async (_key, _value, _context, options) => {
+          if (!options?.signal)
+            throw new Error('Expected a cancellable storage write');
+          reportWrite(options.signal);
+          await storageReply;
+          events.push('write reply');
+          if (outcome === 'confirmed failure')
+            throw new Error('Synthetic storage write failure');
+          if (outcome === 'unconfirmed write')
+            throw new McpError(
+              JsonRpcErrorCode.InternalError,
+              'Synthetic unconfirmed storage write',
+              { writeOutcome: 'unknown' },
+            );
+        });
+      const remove = vi
+        .spyOn(storage, 'delete')
+        .mockImplementation(async () => {
+          events.push('delete');
+          return true;
+        });
+      const controller = new AbortController();
+      const requests: Promise<Response>[] = [];
+      let isolated: ReturnType<typeof createHttpApp> | undefined;
+      try {
+        config.httpSecurity = {
+          ...security,
+          maxSessions: 1,
+          maxSessionsPerPrincipal: 1,
+          requestTimeoutMs: 2_500,
+        };
+        app = isolated = createHttpApp(
+          makeServer,
+          requestContextService.createRequestContext(),
+        );
+        const alice = await token();
+        const sid = await initialize(alice);
+        const write = request(
+          alice,
+          sid,
+          'POST',
+          {
+            jsonrpc: '2.0',
+            id: 7,
+            method: 'tools/call',
+            params: { name: 'git_set_working_dir', arguments: { path: first } },
+          },
+          controller.signal,
+        );
+        requests.push(write);
+        const signal = await Promise.race([
+          writeStarted,
+          write.then(() => {
+            throw new Error('The storage write did not start');
+          }),
+        ]);
+        if (outcome === 'unconfirmed write') {
+          finishWrite();
+          const response = await write;
+          expect(response.status).toBe(200);
+          expect(await response.json()).toMatchObject({
+            result: { isError: true },
+          });
+          const clear = await call(alice, sid, 'git_clear_working_dir', {
+            confirm: 'yes',
+          });
+          expect(clear.isError).toBe(true);
+          expect(JSON.stringify(clear.content)).toContain(
+            'The working-directory write outcome is unknown.',
+          );
+          expect(remove).not.toHaveBeenCalled();
+        }
+
+        const termination = request(alice, sid, 'DELETE');
+        requests.push(termination);
+
+        if (outcome === 'confirmed failure') finishWrite();
+
+        expect((await termination).status).toBe(200);
+        expect(signal.aborted).toBe(outcome === 'client deadline');
+        expect(events).toEqual(
+          outcome === 'confirmed failure'
+            ? ['write reply', 'delete']
+            : outcome === 'unconfirmed write'
+              ? ['write reply']
+              : [],
+        );
+        const replacement = await initialize(alice);
+        expect(replacement).not.toBe(sid);
+      } finally {
+        finishWrite();
+        controller.abort();
+        await Promise.allSettled(requests);
+        remove.mockRestore();
+        set.mockRestore();
+        if (isolated) await closeHttpApp(isolated);
+        app = authenticated;
+        config.httpSecurity = security;
+      }
+    },
+    30_000,
+  );
+
+  it('limits closing sessions and aborts slow storage cleanup at the deadline', async () => {
+    const authenticated = app;
+    const security = config.httpSecurity;
+    let reportDelete!: (signal: AbortSignal) => void;
+    const deleteStarted = new Promise<AbortSignal>((resolve) => {
+      reportDelete = resolve;
+    });
+    let holdDelete = true;
+    const originalDelete = storage.delete.bind(storage);
+    const remove = vi
+      .spyOn(storage, 'delete')
+      .mockImplementation(async (key, context, signal) => {
+        if (!holdDelete) return originalDelete(key, context, signal);
+        holdDelete = false;
+        if (!signal) throw new Error('Expected a cancellable storage delete');
+        signal.throwIfAborted();
+        return new Promise<boolean>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), {
+            once: true,
+          });
+          reportDelete(signal);
+        });
+      });
+    let isolated: ReturnType<typeof createHttpApp> | undefined;
+    let termination: Promise<Response> | undefined;
+    try {
+      config.httpSecurity = {
+        ...security,
+        maxSessions: 1,
+        maxSessionsPerPrincipal: 1,
+        requestTimeoutMs: 1_000,
+      };
+      app = isolated = createHttpApp(
+        makeServer,
+        requestContextService.createRequestContext(),
+      );
+      const alice = await token();
+      const bob = await token({ sub: 'bob' });
+      const sid = await initialize(alice);
+      termination = request(alice, sid, 'DELETE');
+      const signal = await Promise.race([
+        deleteStarted,
+        termination.then(() => {
+          throw new Error('The storage delete did not start');
+        }),
+      ]);
+      const full = await request(bob, undefined, 'POST', init);
+      expect(full.status).toBe(429);
+      await full.text();
+      expect((await termination).status).toBe(200);
+      expect(signal.aborted).toBe(true);
+      expect(await initialize(bob)).not.toBe(sid);
+    } finally {
+      await termination?.catch(() => {});
+      if (isolated) await closeHttpApp(isolated);
+      remove.mockRestore();
+      app = authenticated;
+      config.httpSecurity = security;
+    }
+  });
+
   it.each(['storage', 'server', 'transport'] as const)(
     'expiry cleanup preserves capacity accounting when %s fails',
     async (failure) => {
@@ -460,7 +847,7 @@ suite('authenticated actual HTTP session and repository isolation', () => {
           maxSessions: 1,
           maxSessionsPerPrincipal: 1,
         };
-        config.mcpStatefulSessionStaleTimeoutMs = 100;
+        config.mcpStatefulSessionStaleTimeoutMs = 60_000;
         app = isolated = createHttpApp(async () => {
           const server = await makeServer();
           const originalClose = server.close.bind(server);
@@ -485,6 +872,17 @@ suite('authenticated actual HTTP session and repository isolation', () => {
           const full = await request(auth, undefined, 'POST', init);
           expect(full.status).toBe(429);
           await full.text();
+        }
+        // Expire the original session without making the replacement race a
+        // short wall-clock timeout.
+        const expiry = Date.now() + config.mcpStatefulSessionStaleTimeoutMs + 1;
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(expiry);
+        try {
+          const expired = await request(alice, sid, 'GET');
+          expect(expired.status).toBe(404);
+          await expired.text();
+        } finally {
+          clock.mockRestore();
         }
         await Promise.race([
           cleanupObserved,

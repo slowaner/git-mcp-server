@@ -120,7 +120,6 @@ describe('fixed no-index filesystem authority', () => {
       `#!/bin/sh\nprintf '%s\\0' "$@" >> ${quote(log)}\nprintf '\\n' >> ${quote(log)}\nexec /usr/bin/git "$@"\n`,
       { mode: 0o700 },
     );
-    config.git.executionProfile = 'trusted';
     config.git.binaryPath = binary;
     config.git.baseDirs = [allowed];
     config.git.trustedHome = home;
@@ -423,12 +422,6 @@ describe('fixed no-index filesystem authority', () => {
         await denied(run());
       }),
     ).rejects.toMatchObject({ reason: 'REPOSITORY_BOUNDARY' });
-    expect(commands()).toEqual([]);
-  });
-
-  it('keeps default restricted execution before native work', async () => {
-    config.git.executionProfile = 'restricted';
-    await expect(run()).rejects.toMatchObject({ reason: 'POLICY_UNSUPPORTED' });
     expect(commands()).toEqual([]);
   });
 });

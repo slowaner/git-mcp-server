@@ -47,16 +47,16 @@ type ToolOutput = z.infer<typeof OutputSchema>;
 
 async function gitClearWorkingDirLogic(
   _input: ToolInput,
-  { storage, appContext }: ToolLogicDependencies,
+  { storage, appContext, sdkContext }: ToolLogicDependencies,
 ): Promise<ToolOutput> {
   const state = workingDirectoryStore(storage, appContext);
-  const stored = await state.get();
-  const previousPath = stored
-    ? await resolveGitPath(stored, {
+  const previousPath = await state.clearWithPreviousPath(
+    (stored) =>
+      resolveGitPath(stored, {
         repositoryRoots: repositoryRootsFromContext(appContext),
-      })
-    : null;
-  await state.clear();
+      }),
+    sdkContext?.signal,
+  );
 
   return {
     success: true,

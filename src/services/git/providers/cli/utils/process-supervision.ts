@@ -289,7 +289,14 @@ async function runSupervisedProcess(
     };
 
     const stop = (error?: Error) => {
-      failure ??= error;
+      if (
+        error instanceof GitExecutionError &&
+        error.reason === 'CLEANUP_FAILED'
+      ) {
+        cleanupFailure ??= error;
+      } else {
+        failure ??= error;
+      }
       if (stopping || finished) return;
       stopping = true;
       if (!ready) {

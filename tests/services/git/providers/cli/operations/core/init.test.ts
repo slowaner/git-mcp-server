@@ -4,8 +4,6 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { existsSync } from 'node:fs';
-import { installTrustedGitFixture } from '../../../../../../mcp-server/tools/definitions/helpers/testContext.js';
-installTrustedGitFixture();
 
 import { executeInit } from '@/services/git/providers/cli/operations/core/init.js';
 import type { GitOperationContext } from '@/services/git/types.js';

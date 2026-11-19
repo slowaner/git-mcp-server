@@ -3,14 +3,18 @@
  * @module tests/storage/sessionWorkingDirectoryStore.test
  */
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   principalFromVerifiedClaims,
   sessionWorkingDirectoryKey,
 } from '@/mcp-server/transports/auth/lib/verifiedPrincipal.js';
 import { StorageService } from '@/storage/core/StorageService.js';
-import { SessionWorkingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
+import {
+  SessionWorkingDirectoryStore,
+  SessionWorkingDirectoryWrites,
+} from '@/storage/core/sessionWorkingDirectoryStore.js';
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { InMemoryProvider } from '@/storage/providers/inMemory/inMemoryProvider.js';
 import type { RequestContext } from '@/utils/index.js';
 
@@ -31,6 +35,110 @@ const repoA = path.resolve('/repositories/a');
 const repoB = path.resolve('/repositories/b');
 
 describe('session working-directory store', () => {
+  it('clears the preceding cwd and preserves the next write in the same session', async () => {
+    const storage = new StorageService(new InMemoryProvider());
+    const mutations = new SessionWorkingDirectoryWrites(1_000);
+    const state = new SessionWorkingDirectoryStore(
+      storage,
+      owner,
+      sessionA,
+      context,
+      mutations,
+    );
+    const store = storage.set.bind(storage);
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    vi.spyOn(storage, 'set').mockImplementationOnce(async (...args) => {
+      await writeGate;
+      await store(...args);
+    });
+
+    const firstWrite = state.set(repoA);
+    const clear = state.clearWithPreviousPath(async (stored) => stored);
+    const nextWrite = state.set(repoB);
+    releaseWrite();
+
+    await expect(firstWrite).resolves.toBeUndefined();
+    await expect(clear).resolves.toBe(repoA);
+    await expect(nextWrite).resolves.toBeUndefined();
+    await expect(state.get()).resolves.toBe(repoB);
+  });
+
+  it('preserves cwd when a clear is cancelled during path reauthorization', async () => {
+    const storage = new StorageService(new InMemoryProvider());
+    const mutations = new SessionWorkingDirectoryWrites(1_000);
+    const state = new SessionWorkingDirectoryStore(
+      storage,
+      owner,
+      sessionA,
+      context,
+      mutations,
+    );
+    await state.set(repoA);
+    const remove = vi.spyOn(storage, 'delete');
+    const request = new AbortController();
+
+    const clear = state.clearWithPreviousPath(async (stored) => {
+      request.abort();
+      return stored;
+    }, request.signal);
+
+    await expect(clear).rejects.toMatchObject({ name: 'AbortError' });
+    expect(remove).not.toHaveBeenCalled();
+    await expect(state.get()).resolves.toBe(repoA);
+    await expect(mutations.close()).resolves.toBe(true);
+  });
+
+  it('does not dispatch a queued clear after an unconfirmed write', async () => {
+    const storage = new StorageService(new InMemoryProvider());
+    const mutations = new SessionWorkingDirectoryWrites(1_000);
+    const state = new SessionWorkingDirectoryStore(
+      storage,
+      owner,
+      sessionA,
+      context,
+      mutations,
+    );
+    await state.set(repoA);
+    vi.spyOn(storage, 'set').mockRejectedValueOnce(
+      new McpError(JsonRpcErrorCode.DatabaseError, 'Backend reply lost', {
+        writeOutcome: 'unknown',
+      }),
+    );
+    const remove = vi.spyOn(storage, 'delete');
+
+    const write = state.set(repoB);
+    const clear = state.clearWithPreviousPath(async (stored) => stored);
+
+    await expect(write).rejects.toThrow('Backend reply lost');
+    await expect(clear).rejects.toThrow(
+      'working-directory write outcome is unknown',
+    );
+    expect(remove).not.toHaveBeenCalled();
+    await expect(state.get()).resolves.toBe(repoA);
+    await expect(mutations.close()).resolves.toBe(false);
+  });
+
+  it('stops later writes if a clear may still delete the key', async () => {
+    const mutations = new SessionWorkingDirectoryWrites(1_000);
+    const clear = mutations.clear(async () => {
+      throw new McpError(JsonRpcErrorCode.DatabaseError, 'Backend reply lost', {
+        writeOutcome: 'unknown',
+      });
+    });
+    const store = vi.fn(async () => {});
+    const write = mutations.run(store);
+
+    await expect(clear).rejects.toThrow('Backend reply lost');
+    await expect(write).rejects.toThrow(
+      'working-directory clear outcome is unknown',
+    );
+    expect(store).not.toHaveBeenCalled();
+    await expect(mutations.close()).resolves.toBe(false);
+  });
+
   it('keeps target paths independent while same-owner sessions interleave set and clear', async () => {
     const storage = new StorageService(new InMemoryProvider());
     const a = new SessionWorkingDirectoryStore(

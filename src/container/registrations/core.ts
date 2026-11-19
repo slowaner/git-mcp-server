@@ -6,8 +6,6 @@
  */
 import { container, Lifecycle } from 'tsyringe';
 
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-
 import { parseConfig } from '@/config/index.js';
 import {
   AppConfig,
@@ -17,13 +15,10 @@ import {
   RateLimiterService,
   StorageService,
   StorageProvider,
-  SupabaseAdminClient,
 } from '@/container/tokens.js';
 import { GitProviderFactory } from '@/services/git/core/GitProviderFactory.js';
 import { StorageService as StorageServiceClass } from '@/storage/core/StorageService.js';
 import { createStorageProvider } from '@/storage/core/storageFactory.js';
-import type { Database } from '@/storage/providers/supabase/supabase.types.js';
-import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { logger } from '@/utils/index.js';
 import { RateLimiter } from '@/utils/security/rateLimiter.js';
 
@@ -37,27 +32,6 @@ export const registerCoreServices = () => {
 
   // Logger (as a static value)
   container.register(Logger, { useValue: logger });
-
-  type AppConfigType = ReturnType<typeof parseConfig>;
-
-  container.register<SupabaseClient<Database>>(SupabaseAdminClient, {
-    useFactory: (c) => {
-      const cfg = c.resolve<AppConfigType>(AppConfig);
-      if (!cfg.supabase?.url || !cfg.supabase?.serviceRoleKey) {
-        throw new McpError(
-          JsonRpcErrorCode.ConfigurationError,
-          'Supabase URL or service role key is missing for admin client.',
-        );
-      }
-      return createClient<Database>(
-        cfg.supabase.url,
-        cfg.supabase.serviceRoleKey,
-        {
-          auth: { persistSession: false, autoRefreshToken: false },
-        },
-      );
-    },
-  });
 
   // --- Refactored Storage Service Registration ---
   // 1. Register the factory for the concrete provider against the provider token.

@@ -1,7 +1,7 @@
 /**
  * @fileoverview Defines the core interface for a generic storage provider.
- * This contract ensures that any storage implementation (e.g., in-memory, filesystem, database)
- * can be used interchangeably throughout the application.
+ * This contract lets the application use either local storage implementation
+ * through the same interface.
  * @module src/storage/core/IStorageProvider
  */
 import type { RequestContext } from '@/utils/index.js';
@@ -13,9 +13,6 @@ import type { RequestContext } from '@/utils/index.js';
  *   Provider-specific behaviors:
  *   - `in-memory`: TTL enforced by `setTimeout` for proactive deletion.
  *   - `filesystem`: TTL stored in a metadata envelope; expired items are filtered on `get()` and `list()`.
- *   - `supabase`: TTL managed via an `expires_at` column; expired rows are handled by database queries.
- *   - `cloudflare-kv`: TTL is a native feature of the KV store.
- *   - `cloudflare-r2`: TTL stored in a metadata envelope; expired items are filtered on `get()`. `list()` does not filter expired items due to performance cost.
  */
 export interface StorageOptions {
   /**
@@ -23,6 +20,11 @@ export interface StorageOptions {
    * If not provided, the item will be stored indefinitely.
    */
   ttl?: number;
+  /**
+   * Request cancellation. If the backend cannot confirm a write's outcome,
+   * it rejects with a McpError whose data contains writeOutcome: 'unknown'.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -99,12 +101,14 @@ export interface IStorageProvider {
    * Deletes a value from the storage.
    * @param key The unique key for the item to delete.
    * @param context The request context for logging and tracing.
+   * @param signal Cancellation for a pending backend request.
    * @returns A promise that resolves to true if the item was deleted, false if not found.
    */
   delete(
     tenantId: string,
     key: string,
     context: RequestContext,
+    signal?: AbortSignal,
   ): Promise<boolean>;
 
   /**
