@@ -3,6 +3,11 @@
  * @module tests/mcp-server/resources/definitions/git-working-directory.resource.test
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import {
+  currentPrincipal,
+  currentServerSessionId,
+} from '@/mcp-server/transports/auth/lib/requestIdentity.js';
+import { sessionWorkingDirectoryKey } from '@/mcp-server/transports/auth/lib/verifiedPrincipal.js';
 import { container } from 'tsyringe';
 
 import { gitWorkingDirectoryResource } from '@/mcp-server/resources/definitions/git-working-directory.resource.js';
@@ -82,7 +87,7 @@ describe('git-working-directory resource', () => {
     });
 
     it('returns null when no directory is set', async () => {
-      mockStorage.get.mockResolvedValue(undefined);
+      mockStorage.get.mockResolvedValue(null);
 
       const uri = new URL('git://working-directory');
       const ctx = createContext('test-tenant');
@@ -109,7 +114,10 @@ describe('git-working-directory resource', () => {
       await gitWorkingDirectoryResource.logic(uri, {}, ctx);
 
       expect(mockStorage.get).toHaveBeenCalledWith(
-        'session:workingDir:default-tenant',
+        sessionWorkingDirectoryKey(
+          currentPrincipal(),
+          currentServerSessionId(),
+        ),
         expect.anything(),
       );
     });

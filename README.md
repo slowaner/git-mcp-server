@@ -80,7 +80,8 @@ Bun users: replace `"command": "npx"` with `"command": "bunx"`.
 
 The first `GIT_BASE_DIR` entry anchors relative repository paths. Use an
 absolute path to select a repository under another entry, or use
-`git_set_working_dir` and then pass `.` for the session directory.
+`git_set_working_dir` and then pass `.` for the session directory. STDIO keeps
+that selection in memory for the current connection.
 Roots limit the paths accepted by the server. Git and its helpers run with the
 operator's OS permissions.
 
@@ -114,7 +115,7 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 - All file paths are validated and sanitized to prevent directory traversal.
 - Optional `GIT_BASE_DIR` restricts Git paths and repository metadata to one or more explicitly allowed directory trees.
 - Git commands use validated arguments via process spawning — no shell interpolation.
-- JWT and OAuth support for authenticated deployments.
+- Authenticated HTTP uses JWT or OAuth with an explicit issuer and audience, bounded tokens, and exact principal repository grants. See [authentication and sessions](docs/security/auth-sessions.md).
 - Optional rate limiting via the DI-managed `RateLimiter` service.
 - All operations are logged with request context for auditing.
 
@@ -151,7 +152,7 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 | `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                                                                                   | `(none)`    |
 | `GIT_BASE_DIR`                 | Comma-separated absolute directories; the first anchors relative paths. Tilde expansion is supported. Filesystem roots and literal commas are disallowed.                                                        | `(none)`    |
 | `GIT_WRAPUP_INSTRUCTIONS_PATH` | Path to custom markdown file with workflow instructions.                                                                                                                                                     | `(none)`    |
-| `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ character secret key.                                                                                                                                                           | `(none)`    |
+| `MCP_AUTH_SECRET_KEY`          | Required for `jwt` auth. 32+ UTF-8 byte random secret, required issuer/audience; no development bypass.                                                                                                      | `(none)`    |
 | `OAUTH_ISSUER_URL`             | Required for `oauth` auth. OIDC provider URL.                                                                                                                                                                | `(none)`    |
 
 ## Running the server

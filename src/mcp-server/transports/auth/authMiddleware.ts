@@ -9,7 +9,9 @@ import type { HttpBindings } from '@hono/node-server';
 import type { Context, Next } from 'hono';
 
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
-import { ErrorHandler, logger, requestContextService } from '@/utils/index.js';
+import { logger, requestContextService } from '@/utils/index.js';
+import { withRepositoryRoots } from '@/services/git/core/configured-repository-policy.js';
+import type { PrincipalRepositoryGrants } from './lib/principalRepositoryGrants.js';
 import { authContext } from '@/mcp-server/transports/auth/lib/authContext.js';
 import type { AuthStrategy } from '@/mcp-server/transports/auth/strategies/authStrategy.js';
 
@@ -19,7 +21,10 @@ import type { AuthStrategy } from '@/mcp-server/transports/auth/strategies/authS
  * @param strategy - An instance of a class that implements the `AuthStrategy` interface.
  * @returns A Hono middleware function.
  */
-export function createAuthMiddleware(strategy: AuthStrategy) {
+export function createAuthMiddleware(
+  strategy: AuthStrategy,
+  grants: PrincipalRepositoryGrants,
+) {
   return async function authMiddleware(
     c: Context<{ Bindings: HttpBindings }>,
     next: Next,
@@ -62,38 +67,18 @@ export function createAuthMiddleware(strategy: AuthStrategy) {
       context,
     );
 
-    try {
-      const authInfo = await strategy.verify(token);
-
-      const authLogContext = {
-        ...context,
-        ...(authInfo.tenantId ? { tenantId: authInfo.tenantId } : {}),
-        clientId: authInfo.clientId,
-        subject: authInfo.subject,
-        scopes: authInfo.scopes,
-      };
-      logger.info(
-        'Authentication successful. Auth context populated.',
-        authLogContext,
+    const authInfo = await strategy.verify(token);
+    const principal = authInfo.principal;
+    if (!principal)
+      throw new McpError(
+        JsonRpcErrorCode.Unauthorized,
+        'Verified principal is required.',
       );
-
-      // Run the next middleware in the chain within the populated auth context.
-      await authContext.run({ authInfo }, next);
-    } catch (error) {
-      // The strategy is expected to throw an McpError.
-      // We re-throw it here to be caught by the global httpErrorHandler.
-      logger.warning('Authentication verification failed.', {
-        ...context,
-        error: error instanceof Error ? error.message : String(error),
-      });
-
-      // Ensure consistent error handling
-      throw ErrorHandler.handleError(error, {
-        operation: 'authMiddlewareVerification',
-        context,
-        rethrow: true, // Rethrow to be caught by Hono's global error handler
-        errorCode: JsonRpcErrorCode.Unauthorized, // Default to unauthorized if not more specific
-      });
-    }
+    const repositoryRoots = grants.rootsFor(principal);
+    logger.info('Authentication successful.', context);
+    await authContext.run(
+      { authInfo, principal, repositoryRoots, transport: 'http' },
+      () => withRepositoryRoots(repositoryRoots, next),
+    );
   };
 }

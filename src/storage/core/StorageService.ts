@@ -8,6 +8,16 @@
 import { injectable, inject } from 'tsyringe';
 
 import { StorageProvider } from '@/container/tokens.js';
+import {
+  authenticationRequired,
+  currentPrincipal,
+} from '@/mcp-server/transports/auth/lib/requestIdentity.js';
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
+import {
+  encodeStorageComponent,
+  encodeStorageKey,
+  encodeStoragePrefix,
+} from './storageKeyCodec.js';
 import type { RequestContext } from '@/utils/index.js';
 import type {
   IStorageProvider,
@@ -22,7 +32,20 @@ import type {
  * In production with auth enabled, tenantId will be provided via JWT.
  */
 function getTenantId(context: RequestContext): string {
-  return context.tenantId || 'default-tenant';
+  const tenantId = authenticationRequired()
+    ? currentPrincipal().tenantId
+    : context.tenantId || 'default-tenant';
+  if (
+    authenticationRequired() &&
+    context.tenantId !== undefined &&
+    context.tenantId !== tenantId
+  )
+    throw new McpError(
+      JsonRpcErrorCode.Forbidden,
+      'Storage tenant does not match verified identity.',
+    );
+  encodeStorageComponent(tenantId);
+  return tenantId;
 }
 
 @injectable()
@@ -31,6 +54,7 @@ export class StorageService {
 
   get<T>(key: string, context: RequestContext): Promise<T | null> {
     const tenantId = getTenantId(context);
+    encodeStorageKey(tenantId, key);
     return this.provider.get(tenantId, key, context);
   }
 
@@ -41,12 +65,20 @@ export class StorageService {
     options?: StorageOptions,
   ): Promise<void> {
     const tenantId = getTenantId(context);
+    encodeStorageKey(tenantId, key);
+    options?.signal?.throwIfAborted();
     return this.provider.set(tenantId, key, value, context, options);
   }
 
-  delete(key: string, context: RequestContext): Promise<boolean> {
+  delete(
+    key: string,
+    context: RequestContext,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     const tenantId = getTenantId(context);
-    return this.provider.delete(tenantId, key, context);
+    encodeStorageKey(tenantId, key);
+    signal?.throwIfAborted();
+    return this.provider.delete(tenantId, key, context, signal);
   }
 
   list(
@@ -55,11 +87,13 @@ export class StorageService {
     options?: ListOptions,
   ): Promise<ListResult> {
     const tenantId = getTenantId(context);
+    encodeStoragePrefix(tenantId, prefix);
     return this.provider.list(tenantId, prefix, context, options);
   }
 
   getMany<T>(keys: string[], context: RequestContext): Promise<Map<string, T>> {
     const tenantId = getTenantId(context);
+    for (const key of keys) encodeStorageKey(tenantId, key);
     return this.provider.getMany(tenantId, keys, context);
   }
 
@@ -69,11 +103,13 @@ export class StorageService {
     options?: StorageOptions,
   ): Promise<void> {
     const tenantId = getTenantId(context);
+    for (const key of entries.keys()) encodeStorageKey(tenantId, key);
     return this.provider.setMany(tenantId, entries, context, options);
   }
 
   deleteMany(keys: string[], context: RequestContext): Promise<number> {
     const tenantId = getTenantId(context);
+    for (const key of keys) encodeStorageKey(tenantId, key);
     return this.provider.deleteMany(tenantId, keys, context);
   }
 

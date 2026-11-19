@@ -6,7 +6,7 @@
  */
 import { inject, injectable } from 'tsyringe';
 
-import { SupabaseClient } from '@supabase/supabase-js';
+import { SupabaseClient, type PostgrestError } from '@supabase/supabase-js';
 
 import { SupabaseAdminClient } from '@/container/tokens.js';
 import type {
@@ -20,9 +20,39 @@ import type {
   Database,
 } from '@/storage/providers/supabase/supabase.types.js';
 import { ErrorHandler, type RequestContext, logger } from '@/utils/index.js';
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 
 const TABLE_NAME = 'kv_store';
 const DEFAULT_LIST_LIMIT = 1000;
+
+function unconfirmedWrite(cause: unknown): McpError {
+  return new McpError(
+    JsonRpcErrorCode.DatabaseError,
+    'The storage write outcome could not be confirmed.',
+    { writeOutcome: 'unknown' },
+    { cause },
+  );
+}
+
+async function awaitMutation<
+  T extends { error: PostgrestError | null; status: number },
+>(
+  query: PromiseLike<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const result = await Promise.resolve(query).catch((cause: unknown) => {
+    throw signal ? unconfirmedWrite(cause) : cause;
+  });
+  const { error, status } = result;
+  if (error) {
+    // Only a database cancellation reply confirms a failed bounded mutation.
+    if (signal && !(status === 500 && error.code === '57014')) {
+      throw unconfirmedWrite(error);
+    }
+    throw error;
+  }
+  return result;
+}
 
 @injectable()
 export class SupabaseProvider implements IStorageProvider {
@@ -92,7 +122,7 @@ export class SupabaseProvider implements IStorageProvider {
           ? new Date(Date.now() + options.ttl * 1000).toISOString()
           : null;
 
-        const { error } = await this.getClient()
+        const query = this.getClient()
           .from(TABLE_NAME)
           .upsert({
             tenant_id: tenantId,
@@ -100,8 +130,10 @@ export class SupabaseProvider implements IStorageProvider {
             value: value as Json,
             expires_at,
           });
+        const signal = options?.signal;
+        if (signal) query.abortSignal(signal);
 
-        if (error) throw error;
+        await awaitMutation(query, signal);
       },
       {
         operation: 'SupabaseProvider.set',
@@ -115,16 +147,18 @@ export class SupabaseProvider implements IStorageProvider {
     tenantId: string,
     key: string,
     context: RequestContext,
+    signal?: AbortSignal,
   ): Promise<boolean> {
     return ErrorHandler.tryCatch(
       async () => {
-        const { error, count } = await this.getClient()
+        const query = this.getClient()
           .from(TABLE_NAME)
           .delete({ count: 'exact' })
           .eq('tenant_id', tenantId)
           .eq('key', key);
+        if (signal) query.abortSignal(signal);
 
-        if (error) throw error;
+        const { count } = await awaitMutation(query, signal);
         return (count ?? 0) > 0;
       },
       {

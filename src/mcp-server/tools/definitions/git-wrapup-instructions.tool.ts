@@ -5,6 +5,7 @@
 import { readFileSync } from 'fs';
 import path from 'path';
 import { z } from 'zod';
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { resolveGitPath } from '../utils/git-path-policy.js';
 import { repositoryRootsFromContext } from '@/services/git/core/configured-repository-policy.js';
 
@@ -168,12 +169,10 @@ async function gitWrapupInstructionsLogic(
   input: ToolInput,
   { provider, storage, appContext }: ToolLogicDependencies,
 ): Promise<ToolOutput> {
-  const tenantId = appContext.tenantId || 'default-tenant';
   const finalInstructions =
     customInstructions ?? buildDefaultInstructions(input);
 
-  const storageKey = `session:workingDir:${tenantId}`;
-  const workingDir = await storage.get<string>(storageKey, appContext);
+  const workingDir = await workingDirectoryStore(storage, appContext).get();
 
   if (!workingDir) {
     return {

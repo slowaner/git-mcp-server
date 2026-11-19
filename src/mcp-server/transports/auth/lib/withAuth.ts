@@ -5,6 +5,8 @@
 import type { SdkContext } from '@/mcp-server/tools/utils/toolDefinition.js';
 import { withRequiredScopes } from '@/mcp-server/transports/auth/lib/authUtils.js';
 import type { RequestContext } from '@/utils/index.js';
+import { withRepositoryRoots } from '@/services/git/core/configured-repository-policy.js';
+import { currentRepositoryRoots } from './requestIdentity.js';
 
 /**
  * A higher-order function that wraps a **tool's** logic function with a
@@ -15,7 +17,7 @@ import type { RequestContext } from '@/utils/index.js';
  * @returns A new async function that performs the auth check before executing the logic.
  */
 export function withToolAuth<TInput, TOutput>(
-  requiredScopes: string[],
+  requiredScopes: string[] | ((input: TInput) => string[]),
   logicFn: (
     input: TInput,
     context: RequestContext,
@@ -31,8 +33,14 @@ export function withToolAuth<TInput, TOutput>(
     context: RequestContext,
     sdkContext: SdkContext,
   ): Promise<TOutput> => {
-    withRequiredScopes(requiredScopes);
-    return Promise.resolve(logicFn(input, context, sdkContext));
+    withRequiredScopes(
+      typeof requiredScopes === 'function'
+        ? requiredScopes(input)
+        : requiredScopes,
+    );
+    return withRepositoryRoots(currentRepositoryRoots(), () =>
+      Promise.resolve(logicFn(input, context, sdkContext)),
+    );
   };
 }
 
@@ -58,6 +66,8 @@ export function withResourceAuth<TUri, TParams, TOutput>(
     context: RequestContext,
   ): Promise<TOutput> => {
     withRequiredScopes(requiredScopes);
-    return Promise.resolve(logicFn(uri, params, context));
+    return withRepositoryRoots(currentRepositoryRoots(), () =>
+      Promise.resolve(logicFn(uri, params, context)),
+    );
   };
 }
