@@ -4,6 +4,7 @@
  */
 
 import type { RequestContext } from '@/utils/index.js';
+import path from 'node:path';
 
 import type {
   GitDiffOptions,
@@ -19,6 +20,11 @@ import type { ExecuteGitOptions } from '../../utils/git-executor.js';
 import { GitExecutionError } from '../../utils/execution-errors.js';
 import { recordGitExecutionFailure } from '../../utils/execution-context.js';
 import { parseUntrackedDiffOutput } from '../../utils/untracked-diff-output.js';
+import {
+  literalFileArguments,
+  literalFileOperand,
+  nativeFileNames,
+} from '../../utils/git-file-operands.js';
 
 type DiffExecutor = (
   args: string[],
@@ -62,7 +68,7 @@ export async function executeDiff(
     const flags = [...baseFlags];
 
     if (options.nameOnly) {
-      flags.push('--name-only');
+      flags.push('--name-only', '-z');
     }
 
     if (options.unified !== undefined) {
@@ -72,7 +78,7 @@ export async function executeDiff(
     if (options.paths?.length || options.excludePatterns?.length) {
       pathArgs.push('--');
       if (options.paths?.length) {
-        pathArgs.push(...options.paths);
+        pathArgs.push(...literalFileArguments(options.paths).slice(1));
       }
       if (options.excludePatterns?.length) {
         pathArgs.push(...options.excludePatterns.map((p) => `:(exclude)${p}`));
@@ -84,14 +90,19 @@ export async function executeDiff(
     if (options.excludePatterns?.length) {
       const checkCmd = buildGitCommand({
         command: 'diff',
-        args: [...baseFlags, '--name-only', '--', ...options.excludePatterns],
+        args: [
+          ...baseFlags,
+          '--name-only',
+          '-z',
+          ...literalFileArguments(options.excludePatterns),
+        ],
       });
       const checkResult = await execGit(
         checkCmd,
         context.workingDirectory,
         context.requestContext,
       );
-      const matched = checkResult.stdout.split('\n').filter((f) => f.trim());
+      const matched = nativeFileNames(checkResult.stdout);
       if (matched.length > 0) {
         excludedFiles = matched;
       }
@@ -116,7 +127,11 @@ export async function executeDiff(
       let untrackedDeletions = 0;
       let untrackedStatOutput = '';
       if (options.includeUntracked) {
-        let untrackedFiles = await getUntrackedFiles(execGit, context);
+        let untrackedFiles = await getUntrackedFiles(
+          execGit,
+          context,
+          options.paths,
+        );
         if (options.excludePatterns?.length) {
           ({ files: untrackedFiles, excludedFiles } = applyUntrackedExclusions(
             untrackedFiles,
@@ -164,7 +179,11 @@ export async function executeDiff(
     let untrackedAdditions = 0;
     let untrackedDeletions = 0;
     if (options.includeUntracked) {
-      let untrackedFiles = await getUntrackedFiles(execGit, context);
+      let untrackedFiles = await getUntrackedFiles(
+        execGit,
+        context,
+        options.paths,
+      );
       if (options.excludePatterns?.length) {
         ({ files: untrackedFiles, excludedFiles } = applyUntrackedExclusions(
           untrackedFiles,
@@ -195,10 +214,10 @@ export async function executeDiff(
 
     // For name-only mode, count files from output
     if (options.nameOnly) {
-      const files = combinedDiff.split('\n').filter((line) => line.trim());
+      const files = nativeFileNames(diffResult.stdout);
       return {
-        diff: combinedDiff,
-        filesChanged: files.length,
+        diff: files.map((file) => `${file}\n`).join('') + untrackedDiff,
+        filesChanged: files.length + untrackedFileCount,
         binary: false,
         ...(excludedFiles && { excludedFiles }),
       };
@@ -237,6 +256,7 @@ async function execCombinedUntrackedDiff(
   context: GitOperationContext,
   file: string,
 ) {
+  const operand = file.startsWith('-') ? literalFileOperand(file) : file;
   const result = await execGit(
     buildGitCommand({
       command: 'diff',
@@ -247,7 +267,7 @@ async function execCombinedUntrackedDiff(
         '--patch',
         '--',
         '/dev/null',
-        file,
+        operand,
       ],
     }),
     context.workingDirectory,
@@ -264,7 +284,7 @@ async function execCombinedUntrackedDiff(
       ),
     );
   }
-  return parseUntrackedDiffOutput(result.stdout, file);
+  return parseUntrackedDiffOutput(result.stdout, operand);
 }
 
 /**
@@ -277,17 +297,34 @@ async function getUntrackedFiles(
     ctx: RequestContext,
   ) => Promise<{ stdout: string; stderr: string }>,
   context: GitOperationContext,
+  paths?: readonly string[],
 ): Promise<string[]> {
   const lsFilesCmd = buildGitCommand({
     command: 'ls-files',
-    args: ['--others', '--exclude-standard'],
+    args: ['--others', '--exclude-standard', '-z'],
   });
   const lsFilesResult = await execGit(
     lsFilesCmd,
     context.workingDirectory,
     context.requestContext,
   );
-  return lsFilesResult.stdout.split('\n').filter((f) => f.trim());
+  const files = nativeFileNames(lsFilesResult.stdout);
+  if (!paths?.length) return files;
+  // The main diff already authorized these literal paths through G1. This
+  // selection only removes unrequested repository names; it grants no authority
+  // and does not replace canonical validation before each no-index read.
+  const selected = paths.map((entry) =>
+    path.relative(
+      context.workingDirectory,
+      path.resolve(context.workingDirectory, entry),
+    ),
+  );
+  return files.filter((file) =>
+    selected.some(
+      (entry) =>
+        entry === '' || file === entry || file.startsWith(entry + path.sep),
+    ),
+  );
 }
 
 /**
@@ -297,38 +334,31 @@ async function getUntrackedFiles(
  * @param stat - If true, return --stat output instead of full diff
  */
 async function execUntrackedDiff(
-  execGit: (
-    args: string[],
-    cwd: string,
-    ctx: RequestContext,
-  ) => Promise<{ stdout: string; stderr: string }>,
+  execGit: DiffExecutor,
   context: GitOperationContext,
   file: string,
   stat: boolean,
 ): Promise<string | null> {
-  // git diff --no-index exits with code 1 when files differ, which is expected
-  try {
-    const untrackedCmd = buildGitCommand({
-      command: 'diff',
-      args: ['--no-index', ...(stat ? ['--stat'] : []), '/dev/null', file],
-    });
-    const result = await execGit(
-      untrackedCmd,
-      context.workingDirectory,
-      context.requestContext,
+  const operand = file.startsWith('-') ? literalFileOperand(file) : file;
+  const untrackedCmd = buildGitCommand({
+    command: 'diff',
+    args: ['--no-index', ...(stat ? ['--stat'] : []), '/dev/null', operand],
+  });
+  const result = await execGit(
+    untrackedCmd,
+    context.workingDirectory,
+    context.requestContext,
+    { allowNonZeroExit: true },
+  );
+  if (result.exitCode !== 0 && result.exitCode !== 1) {
+    throw recordGitExecutionFailure(
+      new GitExecutionError(
+        'INVALID_OUTPUT_FORMAT',
+        'Invalid untracked Git diff outcome.',
+      ),
     );
-    return result.stdout;
-  } catch (err: unknown) {
-    // git diff --no-index exits with code 1 when files differ
-    // The error message format is: "Exit Code: N\nStderr: ...\nStdout: ..."
-    if (err instanceof Error) {
-      const stdoutMatch = err.message.match(/\nStdout: ([\s\S]*)$/);
-      if (stdoutMatch?.[1]) {
-        return stdoutMatch[1];
-      }
-    }
-    return null;
   }
+  return result.stdout;
 }
 
 /**

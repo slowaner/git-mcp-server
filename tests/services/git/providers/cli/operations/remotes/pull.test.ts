@@ -2,21 +2,13 @@
  * @fileoverview Unit tests for git pull operation
  * @module tests/services/git/providers/cli/operations/remotes/pull.test
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
+import { config } from '@/config/index.js';
 import { executePull } from '@/services/git/providers/cli/operations/remotes/pull.js';
-import { shouldSignCommits } from '@/services/git/providers/cli/utils/config-helper.js';
+import { shouldSignCommits } from '@/services/git/providers/cli/utils/index.js';
 import type { GitOperationContext } from '@/services/git/types.js';
 import type { RequestContext } from '@/utils/index.js';
-
-// Mock shouldSignCommits to return false by default. Tests that exercise
-// signing behavior flip it per-case via the `mockReturnValueOnce` cast
-// below — bun's test runner doesn't expose vi.mocked, so we use a direct
-// cast on the imported function.
-vi.mock('@/services/git/providers/cli/utils/config-helper.js', () => ({
-  shouldSignCommits: vi.fn(() => false),
-  loadConfig: vi.fn(() => null),
-}));
 
 type ExecGitFn = (
   args: string[],
@@ -35,9 +27,17 @@ describe('executePull', () => {
   };
 
   let mockExecGit: ReturnType<typeof vi.fn<ExecGitFn>>;
+  let savedSigning: boolean;
 
   beforeEach(() => {
+    savedSigning = config.git.signCommits;
+    config.git.signCommits = false;
+    expect(shouldSignCommits()).toBe(false);
     mockExecGit = vi.fn<ExecGitFn>();
+  });
+  afterEach(() => {
+    config.git.signCommits = savedSigning;
+    expect(shouldSignCommits()).toBe(savedSigning);
   });
 
   describe('basic pull operations', () => {
@@ -303,11 +303,8 @@ Fast-forward
 
   describe('signing policy', () => {
     it('adds -S when GIT_SIGN_COMMITS is enabled', async () => {
-      (
-        shouldSignCommits as unknown as {
-          mockReturnValueOnce: (v: boolean) => void;
-        }
-      ).mockReturnValueOnce(true);
+      config.git.signCommits = true;
+      expect(shouldSignCommits()).toBe(true);
 
       mockExecGit.mockResolvedValueOnce({
         stdout: 'Already up to date.\n',
@@ -333,11 +330,8 @@ Fast-forward
     });
 
     it('forwards -S through the rebase path', async () => {
-      (
-        shouldSignCommits as unknown as {
-          mockReturnValueOnce: (v: boolean) => void;
-        }
-      ).mockReturnValueOnce(true);
+      config.git.signCommits = true;
+      expect(shouldSignCommits()).toBe(true);
 
       mockExecGit.mockResolvedValueOnce({
         stdout: 'Successfully rebased and updated refs/heads/main.\n',

@@ -21,7 +21,7 @@ import {
   createJsonFormatter,
   type VerbosityLevel,
 } from '../utils/json-response-formatter.js';
-import { validateProtectedBranchOperation } from '../utils/git-validators.js';
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 
 const TOOL_NAME = 'git_push';
 const TOOL_TITLE = 'Git Push';
@@ -61,15 +61,17 @@ const InputSchema = z
       .boolean()
       .default(false)
       .describe(
-        'Explicit confirmation required for force push or branch deletion on protected branches (main, master, production, etc.).',
+        'Caller assertion required for every force, lease or deletion push. Host approval remains separate.',
       ),
   })
   .strict();
 
 const OutputSchema = z.object({
   success: z.boolean().describe('Indicates if the operation was successful.'),
-  remote: z.string().describe('Remote name that was pushed to.'),
-  branch: z.string().describe('Branch that was pushed.'),
+  remote: z.string().describe('Selected remote name or destination.'),
+  branch: z
+    .string()
+    .describe('Selected branch; empty when no local tags were selected.'),
   upstreamSet: z
     .boolean()
     .describe('Whether upstream tracking was set for the branch.'),
@@ -88,31 +90,13 @@ async function gitPushLogic(
   input: ToolInput,
   { provider, targetPath, appContext }: ToolLogicDependencies,
 ): Promise<ToolOutput> {
-  // Enforce protected branch checks for destructive operations
-  if (input.force || input.delete) {
-    let branchToCheck = input.branch;
-    if (!branchToCheck) {
-      const status = await provider.status(
-        { includeUntracked: false },
-        {
-          workingDirectory: targetPath,
-          requestContext: appContext,
-          tenantId: appContext.tenantId || 'default-tenant',
-        },
-      );
-      branchToCheck = status?.currentBranch ?? undefined;
-    }
-    if (branchToCheck) {
-      const operation = input.force ? 'force push' : 'branch deletion';
-      validateProtectedBranchOperation(
-        branchToCheck,
-        operation,
-        input.confirmed,
-      );
-    }
-  }
-
+  if ((input.force || input.forceWithLease || input.delete) && !input.confirmed)
+    throw new McpError(
+      JsonRpcErrorCode.ValidationError,
+      'Caller confirmation is required for every force, lease or deletion push.',
+    );
   const pushOptions: {
+    confirmed?: boolean;
     remote?: string;
     branch?: string;
     force?: boolean;
@@ -122,7 +106,7 @@ async function gitPushLogic(
     dryRun?: boolean;
     delete?: boolean;
     remoteBranch?: string;
-  } = {};
+  } = { confirmed: input.confirmed };
 
   if (input.remote !== undefined) {
     pushOptions.remote = input.remote;

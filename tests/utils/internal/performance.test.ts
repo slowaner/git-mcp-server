@@ -53,7 +53,9 @@ describe('measureToolExecution', () => {
   });
 
   it('records success metrics and returns the tool result', async () => {
-    const byteLengthSpy = vi.spyOn(Buffer, 'byteLength');
+    const serialize = vi.fn(() => {
+      throw new Error('Input must not be serialized for metrics');
+    });
     memoryUsageSpy
       .mockReturnValueOnce({ rss: 1000, heapUsed: 400 } as NodeJS.MemoryUsage)
       .mockReturnValueOnce({ rss: 1600, heapUsed: 700 } as NodeJS.MemoryUsage);
@@ -65,7 +67,7 @@ describe('measureToolExecution', () => {
         requestId: 'req-1',
         timestamp: new Date().toISOString(),
       },
-      { input: 'value' },
+      { input: 'value', toJSON: serialize },
     );
 
     expect(result).toEqual({ message: 'ok' });
@@ -73,8 +75,8 @@ describe('measureToolExecution', () => {
     const call = infoSpy.mock.calls[0];
     if (!call) throw new Error('infoSpy was not called');
     const [, logMeta] = call;
-    expect((logMeta as any).metrics.isSuccess).toBe(true);
-    expect((logMeta as any).metrics.errorCode).toBeUndefined();
+    expect((logMeta as any).outcome).toBe('success');
+    expect((logMeta as any).errorCode).toBeUndefined();
     expect(span.setStatus).toHaveBeenCalledWith({ code: SpanStatusCode.OK });
     expect(span.setAttributes).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -83,8 +85,10 @@ describe('measureToolExecution', () => {
       }),
     );
     expect(span.end).toHaveBeenCalled();
-    expect(byteLengthSpy).toHaveBeenCalled();
-    byteLengthSpy.mockRestore();
+    expect(serialize).not.toHaveBeenCalled();
+    expect((logMeta as any).inputSizeKnown).toBe(false);
+    expect((logMeta as any).outputSizeKnown).toBe(false);
+    expect((logMeta as any).inputBytes).toBeUndefined();
   });
 
   it('captures error metadata and rethrows the original McpError', async () => {
@@ -108,10 +112,12 @@ describe('measureToolExecution', () => {
       ),
     ).rejects.toBe(failure);
 
-    expect(span.recordException).toHaveBeenCalledWith(failure);
+    expect(span.recordException).toHaveBeenCalledWith({
+      name: 'OperationError',
+      message: `Operation failed (${JsonRpcErrorCode.InternalError})`,
+    });
     expect(span.setStatus).toHaveBeenCalledWith({
       code: SpanStatusCode.ERROR,
-      message: 'boom',
     });
     expect(span.setAttribute).toHaveBeenCalledWith(
       'mcp.tool.error_code',
@@ -120,13 +126,11 @@ describe('measureToolExecution', () => {
     const call = infoSpy.mock.calls[0];
     if (!call) throw new Error('infoSpy was not called');
     const [, logMeta] = call;
-    expect((logMeta as any).metrics.isSuccess).toBe(false);
-    expect((logMeta as any).metrics.errorCode).toBe(
-      String(JsonRpcErrorCode.InternalError),
-    );
+    expect((logMeta as any).outcome).toBe('failure');
+    expect((logMeta as any).errorCode).toBe(JsonRpcErrorCode.InternalError);
   });
 
-  it('handles generic errors and uses JSON length fallback when Buffer is unavailable', async () => {
+  it('handles generic errors and measures primitives without Buffer or TextEncoder', async () => {
     const mutableGlobal = globalThis as {
       Buffer?: typeof Buffer;
       TextEncoder?: typeof TextEncoder;
@@ -142,7 +146,7 @@ describe('measureToolExecution', () => {
       .mockReturnValueOnce({ rss: 220, heapUsed: 140 } as NodeJS.MemoryUsage);
 
     const failure = new Error('unexpected');
-    const payload = { key: 'value' };
+    const payload = 'value';
     const expectedBytes = JSON.stringify(payload).length;
 
     try {
@@ -175,11 +179,11 @@ describe('measureToolExecution', () => {
     const call = infoSpy.mock.calls[0];
     if (!call) throw new Error('infoSpy was not called');
     const [, logMeta] = call;
-    expect((logMeta as any).metrics.inputBytes).toBe(expectedBytes);
-    expect((logMeta as any).metrics.outputBytes).toBe(0);
+    expect((logMeta as any).inputBytes).toBe(expectedBytes);
+    expect((logMeta as any).outputBytes).toBe(0);
   });
 
-  it('uses TextEncoder fallback when Buffer is unavailable but TextEncoder exists', async () => {
+  it('leaves object graphs explicitly unmeasured without invoking TextEncoder', async () => {
     const mutableGlobal = globalThis as {
       Buffer?: typeof Buffer;
       TextEncoder?: typeof TextEncoder;
@@ -225,12 +229,14 @@ describe('measureToolExecution', () => {
       );
 
       expect(result).toEqual({ ok: true });
-      expect(encodeSpy).toHaveBeenCalled();
+      expect(encodeSpy).not.toHaveBeenCalled();
       const call = localInfoSpy.mock.calls[0];
       if (!call) throw new Error('info logger was not called');
       const [, logMeta] = call;
-      expect((logMeta as any).metrics.isSuccess).toBe(true);
-      expect((logMeta as any).metrics.errorCode).toBeUndefined();
+      expect((logMeta as any).outcome).toBe('success');
+      expect((logMeta as any).errorCode).toBeUndefined();
+      expect((logMeta as any).inputSizeKnown).toBe(false);
+      expect((logMeta as any).inputBytes).toBeUndefined();
     } finally {
       if (originalBuffer) mutableGlobal.Buffer = originalBuffer;
       else delete mutableGlobal.Buffer;

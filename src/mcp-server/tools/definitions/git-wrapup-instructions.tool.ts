@@ -5,6 +5,10 @@
 import { readFileSync } from 'fs';
 import path from 'path';
 import { z } from 'zod';
+import {
+  REPOSITORY_TRUST_BOUNDARY,
+  repositoryData,
+} from '@/mcp-server/prompts/utils/repository-trust.js';
 import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { resolveGitPath } from '../utils/git-path-policy.js';
 import { repositoryRootsFromContext } from '@/services/git/core/configured-repository-policy.js';
@@ -170,7 +174,11 @@ async function gitWrapupInstructionsLogic(
   { provider, storage, appContext }: ToolLogicDependencies,
 ): Promise<ToolOutput> {
   const finalInstructions =
-    customInstructions ?? buildDefaultInstructions(input);
+    REPOSITORY_TRUST_BOUNDARY +
+    '\n\n' +
+    (customInstructions === null
+      ? buildDefaultInstructions(input)
+      : repositoryData('custom-wrapup', customInstructions));
 
   const workingDir = await workingDirectoryStore(storage, appContext).get();
 

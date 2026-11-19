@@ -102,11 +102,15 @@ import {
   executeWorktree,
 } from './operations/index.js';
 import {
+  authorizeEmptyTagPushDestination,
   executeGitCommand,
   type ExecuteGitOptions,
 } from './utils/git-executor.js';
 import { validateGitRepository } from './utils/git-validators.js';
 import { isGitNotFoundError } from './utils/error-mapper.js';
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
+import { GitExecutionError } from './utils/execution-errors.js';
+import { recordGitExecutionFailure } from './utils/execution-context.js';
 import {
   assertConfiguredGitExecutionPolicy,
   withConfiguredGitExecutionContext,
@@ -130,11 +134,30 @@ export class CliGitProvider extends BaseGitProvider implements IGitProvider {
     assertConfiguredGitExecutionPolicy();
     return withConfiguredGitExecutionContext(
       context.signal,
-      () =>
-        withRepositoryRoots(
-          repositoryRootsFromContext(context.requestContext),
-          () => withRepositoryRoots(context.repositoryRoots, operation),
-        ),
+      () => {
+        let enteredOperation = false;
+        try {
+          return withRepositoryRoots(
+            repositoryRootsFromContext(context.requestContext),
+            () =>
+              withRepositoryRoots(context.repositoryRoots, () => {
+                enteredOperation = true;
+                return operation();
+              }),
+          );
+        } catch (error) {
+          if (
+            !enteredOperation &&
+            !(error instanceof GitExecutionError) &&
+            error instanceof McpError &&
+            error.code === JsonRpcErrorCode.Forbidden
+          )
+            throw recordGitExecutionFailure(
+              new GitExecutionError('REPOSITORY_BOUNDARY', error.message),
+            );
+          throw error;
+        }
+      },
       context.deadline,
     );
   }
@@ -626,7 +649,13 @@ export class CliGitProvider extends BaseGitProvider implements IGitProvider {
         repositoryRoots: context.repositoryRoots,
       });
     const result = await this.runOperation(context, () =>
-      executePush(options, context, executor),
+      executePush(options, context, executor, (remote) =>
+        authorizeEmptyTagPushDestination(remote, context.workingDirectory, {
+          signal: context.signal,
+          deadline: context.deadline,
+          repositoryRoots: context.repositoryRoots,
+        }),
+      ),
     );
     this.logOperationSuccess('push', context, {
       success: result.success,

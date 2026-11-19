@@ -5,6 +5,9 @@
  * @module
  */
 import { SpanStatusCode, trace } from '@opentelemetry/api';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   afterAll,
   beforeAll,
@@ -21,6 +24,10 @@ import {
 } from '../../../src/types-global/errors.js';
 import { ErrorHandler } from '../../../src/utils/internal/error-handler/index.js';
 import { logger } from '../../../src/utils/internal/logger.js';
+import { auditCorrelation } from '@/utils/internal/safe-audit.js';
+import { config } from '@/config/index.js';
+const originalLogsPath = config.logsPath;
+let logsPath: string;
 
 // Spy on the actual logger instance's error method
 const errorSpy = vi.spyOn(logger, 'error');
@@ -39,13 +46,19 @@ describe('ErrorHandler', () => {
       (vi as any).useRealTimers();
     }
 
-    // Initialize the logger once for all tests in this file
-    await logger.initialize('debug');
+    if (logger.isInitialized()) await logger.close();
+    logsPath = mkdtempSync(join(tmpdir(), 'error-handler-logs-'));
+    config.logsPath = logsPath;
+    await logger.initialize('debug', 'stdio');
   });
 
   afterAll(async () => {
     // Close the logger once after all tests have run
     await logger.close();
+    config.logsPath = originalLogsPath;
+    if (logsPath) rmSync(logsPath, { recursive: true, force: true });
+    errorSpy.mockRestore();
+    getActiveSpanSpy.mockRestore();
   });
 
   beforeEach(() => {
@@ -105,15 +118,14 @@ describe('ErrorHandler', () => {
       const call = errorSpy.mock.calls[0];
       if (!call) throw new Error('errorSpy was not called');
       const [errorMessage, logContext] = call;
-      expect(errorMessage).toContain(
-        'Error in testOperation: Something failed',
-      );
+      expect(errorMessage).toBe('Operation failed.');
       expect(logContext).toMatchObject({
-        requestId: 'test-123',
-        operation: 'testOperation',
-        input: { data: 'sample' },
+        requestCorrelation: auditCorrelation('requestId', 'test-123'),
+        event: 'exception',
+        operation: 'internal',
         errorCode: JsonRpcErrorCode.InternalError,
       });
+      expect(logContext).not.toHaveProperty('input');
     });
 
     it('should rethrow the error when rethrow: true', () => {
@@ -139,10 +151,12 @@ describe('ErrorHandler', () => {
       const error = new Error('Telemetry test');
       ErrorHandler.handleError(error, { operation: 'otelTest' });
 
-      expect(mockSpan.recordException).toHaveBeenCalledWith(error);
+      expect(mockSpan.recordException).toHaveBeenCalledWith({
+        name: 'OperationError',
+        message: 'Operation failed',
+      });
       expect(mockSpan.setStatus).toHaveBeenCalledWith({
         code: SpanStatusCode.ERROR,
-        message: 'Telemetry test',
       });
     });
 
@@ -216,8 +230,9 @@ describe('ErrorHandler', () => {
       if (!call) throw new Error('errorSpy was not called');
       const [, logContext] = call;
       expect(logContext).toMatchObject({
-        requestId: 'try-123',
-        operation: 'tryCatchFailure',
+        requestCorrelation: auditCorrelation('requestId', 'try-123'),
+        event: 'exception',
+        operation: 'internal',
         errorCode: JsonRpcErrorCode.InternalError,
       });
     });

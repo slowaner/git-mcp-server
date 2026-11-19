@@ -19,7 +19,7 @@ import {
   createJsonFormatter,
   type VerbosityLevel,
 } from '../utils/json-response-formatter.js';
-import { validateProtectedBranchOperation } from '../utils/git-validators.js';
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 
 const TOOL_NAME = 'git_reset';
 const TOOL_TITLE = 'Git Reset';
@@ -48,7 +48,7 @@ const InputSchema = z
       .boolean()
       .default(false)
       .describe(
-        'Explicit confirmation required for hard, merge, and keep reset modes on protected branches (main, master, production, etc.).',
+        'Caller assertion required for hard, merge and keep reset on every branch and detached HEAD. Host approval remains separate.',
       ),
   })
   .strict();
@@ -77,29 +77,16 @@ async function gitResetLogic(
   input: ToolInput,
   { provider, targetPath, appContext }: ToolLogicDependencies,
 ): Promise<ToolOutput> {
-  // Enforce protected branch checks for destructive reset modes
-  if (
-    input.mode === 'hard' ||
-    input.mode === 'merge' ||
-    input.mode === 'keep'
-  ) {
-    const status = await provider.status(
-      { includeUntracked: false },
-      {
-        workingDirectory: targetPath,
-        requestContext: appContext,
-        tenantId: appContext.tenantId || 'default-tenant',
-      },
+  if (input.paths?.length === 0)
+    throw new McpError(
+      JsonRpcErrorCode.ValidationError,
+      'An explicit reset path selection must not be empty.',
     );
-    if (status?.currentBranch) {
-      validateProtectedBranchOperation(
-        status.currentBranch,
-        `reset --${input.mode}`,
-        input.confirmed,
-      );
-    }
-  }
-
+  if (['hard', 'merge', 'keep'].includes(input.mode) && !input.confirmed)
+    throw new McpError(
+      JsonRpcErrorCode.ValidationError,
+      'Caller confirmation is required for hard, merge and keep reset on every branch and detached HEAD.',
+    );
   const resetOptions: {
     mode: 'soft' | 'mixed' | 'hard' | 'merge' | 'keep';
     commit: string;

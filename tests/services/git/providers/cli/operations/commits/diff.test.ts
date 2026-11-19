@@ -92,9 +92,7 @@ index abc123..def456 100644
 
   describe('nameOnly option', () => {
     it('adds --name-only flag when nameOnly is true', async () => {
-      const nameOnlyOutput = `file1.txt
-file2.txt
-file3.txt`;
+      const nameOnlyOutput = 'file1.txt\0file2.txt\0file3.txt\0';
 
       mockExecGit.mockResolvedValueOnce({
         stdout: nameOnlyOutput,
@@ -109,13 +107,12 @@ file3.txt`;
 
       const [args] = mockExecGit.mock.calls[0]!;
       expect(args).toContain('--name-only');
-      expect(result.diff).toBe(nameOnlyOutput);
+      expect(result.diff).toBe(nameOnlyOutput.replaceAll('\0', '\n'));
       expect(result.filesChanged).toBe(3);
     });
 
     it('counts files correctly in nameOnly mode', async () => {
-      const nameOnlyOutput = `src/index.ts
-src/utils.ts`;
+      const nameOnlyOutput = 'src/index.ts\0src/utils.ts\0';
 
       mockExecGit.mockResolvedValueOnce({
         stdout: nameOnlyOutput,
@@ -230,12 +227,12 @@ src/utils.ts`;
     it('includes untracked files in nameOnly mode', async () => {
       // First call: regular diff --name-only
       mockExecGit.mockResolvedValueOnce({
-        stdout: 'tracked.txt\n',
+        stdout: 'tracked.txt\0',
         stderr: '',
       });
       // Second call: ls-files for untracked
       mockExecGit.mockResolvedValueOnce({
-        stdout: 'untracked.txt\n',
+        stdout: 'untracked.txt\0',
         stderr: '',
       });
 
@@ -269,7 +266,7 @@ new file mode 100644
         // Regular diff
         .mockResolvedValueOnce({ stdout: trackedDiff, stderr: '' })
         // ls-files for untracked
-        .mockResolvedValueOnce({ stdout: 'untracked.txt\n', stderr: '' })
+        .mockResolvedValueOnce({ stdout: 'untracked.txt\0', stderr: '' })
         // One complete machine prefix plus unchanged patch; exit 1 is ordinary.
         .mockResolvedValueOnce({
           stdout: `1\t0\t\0/dev/null\0untracked.txt\0\0${untrackedDiff}`,
@@ -316,7 +313,7 @@ new file mode 100644
       mockExecGit
         .mockResolvedValueOnce({ stdout: '', stderr: '' }) // no tracked changes
         .mockResolvedValueOnce({
-          stdout: 'file1.txt\nfile2.txt\nfile3.txt\n',
+          stdout: 'file1.txt\0file2.txt\0file3.txt\0',
           stderr: '',
         })
         // Three untracked files: one combined call each.
@@ -361,7 +358,7 @@ new file mode 100644
       const [args] = mockExecGit.mock.calls[0]!;
       const dashDashIdx = args.indexOf('--');
       expect(dashDashIdx).toBeGreaterThan(-1);
-      expect(args[dashDashIdx + 1]).toBe('src/index.ts');
+      expect(args[dashDashIdx + 1]).toBe(':(literal)src/index.ts');
     });
   });
 
@@ -425,15 +422,15 @@ Binary files a/image.png and b/image.png differ`;
       const [args] = mockExecGit.mock.calls[0]!;
       const dashDashIdx = args.indexOf('--');
       expect(dashDashIdx).toBe(args.length - 2);
-      expect(args[args.length - 1]).toBe('src/');
+      expect(args[args.length - 1]).toBe(':(literal)src/');
     });
   });
 
   describe('combined options', () => {
     it('handles staged + nameOnly + includeUntracked', async () => {
       mockExecGit
-        .mockResolvedValueOnce({ stdout: 'staged.txt\n', stderr: '' })
-        .mockResolvedValueOnce({ stdout: 'untracked.txt\n', stderr: '' });
+        .mockResolvedValueOnce({ stdout: 'staged.txt\0', stderr: '' })
+        .mockResolvedValueOnce({ stdout: 'untracked.txt\0', stderr: '' });
 
       const result = await executeDiff(
         { staged: true, nameOnly: true, includeUntracked: true },
@@ -474,7 +471,7 @@ Binary files a/image.png and b/image.png differ`;
     it('reports files that were excluded from the diff', async () => {
       mockExecGit
         // exclude detection: bun.lock had changes
-        .mockResolvedValueOnce({ stdout: 'bun.lock\n', stderr: '' })
+        .mockResolvedValueOnce({ stdout: 'bun.lock\0', stderr: '' })
         // main diff (without bun.lock)
         .mockResolvedValueOnce({ stdout: 'diff output', stderr: '' })
         // stat
@@ -518,7 +515,7 @@ Binary files a/image.png and b/image.png differ`;
         .mockResolvedValueOnce({ stdout: '', stderr: '' })
         // ls-files for untracked (includes a lock file)
         .mockResolvedValueOnce({
-          stdout: 'new-file.txt\nbun.lock\n',
+          stdout: 'new-file.txt\0bun.lock\0',
           stderr: '',
         })
         // One exact combined call after exclusion.
@@ -545,7 +542,7 @@ Binary files a/image.png and b/image.png differ`;
     it('excludes pathspecs in stat mode', async () => {
       mockExecGit
         // exclude detection
-        .mockResolvedValueOnce({ stdout: 'bun.lock\n', stderr: '' })
+        .mockResolvedValueOnce({ stdout: 'bun.lock\0', stderr: '' })
         // stat
         .mockResolvedValueOnce({
           stdout: ' src/index.ts | 1 +\n 1 file changed, 1 insertion(+)',
@@ -567,9 +564,9 @@ Binary files a/image.png and b/image.png differ`;
     it('excludes in nameOnly mode', async () => {
       mockExecGit
         // exclude detection
-        .mockResolvedValueOnce({ stdout: 'yarn.lock\n', stderr: '' })
+        .mockResolvedValueOnce({ stdout: 'yarn.lock\0', stderr: '' })
         // main diff --name-only
-        .mockResolvedValueOnce({ stdout: 'src/app.ts\n', stderr: '' });
+        .mockResolvedValueOnce({ stdout: 'src/app.ts\0', stderr: '' });
 
       const result = await executeDiff(
         { nameOnly: true, excludePatterns: ['yarn.lock'] },

@@ -101,7 +101,7 @@ const OutputSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Populated when an explicit signing attempt failed and creation was retried using native Git configuration. The retry may still produce a signature.',
+      'Legacy compatibility field. Creation runs once and never retries unsigned; current implementations omit this field.',
     ),
   status: z
     .object({

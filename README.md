@@ -114,7 +114,7 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 | Provider architecture        | Pluggable git provider system. Current: CLI. Planned: isomorphic-git for edge deployment.                                                                                                                                         |
 | Working directory management | Session-specific directory context for multi-repo workflows.                                                                                                                                                                      |
 | Configurable git identity    | Override author/committer info via environment variables, with fallback to global git config.                                                                                                                                     |
-| Commit signing               | Explicit signing by default for commits, tags, merges, rebases, cherry-picks, and pulls. Set `GIT_SIGN_COMMITS=false` to follow native Git signing config. Commit/tag retries report actual `signed` status and `signingWarning`. |
+| Commit signing               | Explicit signing by default for commits, tags, merges, rebases, cherry-picks, and pulls. Set `GIT_SIGN_COMMITS=false` to follow native Git signing config. Commit/tag creation runs once; required signing never retries unsigned. `signed` reports presence, not trust. |
 | Safety                       | Destructive operations (`git clean`, `git reset --hard`) require explicit confirmation flags.                                                                                                                                     |
 
 ## Security
@@ -124,7 +124,8 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 - Git commands use validated arguments via process spawning — no shell interpolation.
 - Authenticated HTTP uses local JWT with an explicit issuer and audience, bounded tokens, and exact principal repository grants. See [authentication and sessions](docs/security/auth-sessions.md).
 - Optional rate limiting via the DI-managed `RateLimiter` service.
-- All operations are logged with request context for auditing.
+- Audit events use an allowlisted, payload-free schema with keyed correlations.
+  See [Git integrity, signing and safety semantics](docs/security-integrity.md).
 
 ## Configuration
 
@@ -133,10 +134,11 @@ preserves Git's system, global, repository, and conditional-include configuratio
 including `commit.gpgSign`, `tag.gpgSign`, `tag.forceSignAnnotated`, `gpg.format`,
 and `user.signingKey`. It does not disable signing or choose a different key.
 Configured signing failures propagate. With `GIT_SIGN_COMMITS=true` (the default),
-signing is explicitly requested; only commit/tag creation retries a failure
-without that explicit request, leaving native configuration active. The retry
-can still sign or fail. Commit/tag `signed` reports signature presence, not trust
-verification; `signingWarning` reports a retry.
+signing is explicitly requested and commit/tag creation fails without an
+unsigned retry. Each creation runs once so hooks cannot repeat on fallback.
+Commit/tag `signed` reports signature presence, not cryptographic validity or
+verifier trust. Native policy remains active from the first attempt when
+`GIT_SIGN_COMMITS=false`.
 
 The standalone server writes logs locally and ignores legacy OTLP exporter settings.
 
@@ -154,7 +156,7 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 | `MCP_AUTH_MODE`                | HTTP authentication mode: `none` or `jwt`.                                                                                                                                                                   | `none`      |
 | `STORAGE_PROVIDER_TYPE`        | Storage backend: `in-memory` or `filesystem`.                                                                                                                                                                | `in-memory` |
 | `MCP_LOG_LEVEL`                | Minimum log level: `debug`, `info`, `warn`, `error`.                                                                                                                                                         | `info`      |
-| `GIT_SIGN_COMMITS`             | Explicit signing for commits, tags, merges, rebases, cherry-picks, and pulls; `false` defers to native Git config. Only commit/tag retries remove the explicit signing flag (see `signed`/`signingWarning`). | `true`      |
+| `GIT_SIGN_COMMITS`             | Explicit signing for commits, tags, merges, rebases, cherry-picks, and pulls; `false` defers to native Git config. Commit/tag creation never retries unsigned; inspect actual `signed` presence separately from verification. | `true`      |
 | `GIT_AUTHOR_NAME`              | Git author name. Aliases: `GIT_USERNAME`, `GIT_USER`. Falls back to global git config.                                                                                                                       | `(none)`    |
 | `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                                                                                   | `(none)`    |
 | `GIT_BASE_DIR`                 | Comma-separated absolute directories; the first anchors relative paths. Tilde expansion is supported. Filesystem roots and literal commas are disallowed.                                                    | `(none)`    |

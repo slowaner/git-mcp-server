@@ -255,6 +255,10 @@ const SAFE_GIT_OPTIONS = new Set([
 const SHORT_FLAG_WITH_VALUE = /^-(?:n\d+|L\d+,\d*)$/;
 
 export function validateGitArgs(args: string[]): void {
+  const identityOnlyHistory =
+    args[0] === 'log' &&
+    args[1] === '--no-show-signature' &&
+    args[2] === '--format=%H';
   // The qualified combined untracked producer is a complete private tuple,
   // never generic permission for numstat/patch flags or arbitrary no-index argv.
   const combinedUntracked =
@@ -281,6 +285,7 @@ export function validateGitArgs(args: string[]): void {
     const isShortFlag = SHORT_FLAG_WITH_VALUE.test(arg);
     const isSafeOption =
       SAFE_GIT_OPTIONS.has(flagName) ||
+      (identityOnlyHistory && arg === '--no-show-signature') ||
       (combinedUntracked && (arg === '--numstat' || arg === '--patch'));
 
     if (!isShortFlag && !isSafeOption) {

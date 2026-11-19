@@ -44,8 +44,8 @@ describe('executeAdd', () => {
 
       const [args] = mockExecGit.mock.calls[0]!;
       expect(args).toContain('add');
-      expect(args).toContain('src/index.ts');
-      expect(args).toContain('src/utils.ts');
+      expect(args).toContain(':(literal)src/index.ts');
+      expect(args).toContain(':(literal)src/utils.ts');
     });
 
     it('stages a single file', async () => {
@@ -61,7 +61,7 @@ describe('executeAdd', () => {
       expect(result.stagedFiles).toEqual(['README.md']);
 
       const [args] = mockExecGit.mock.calls[0]!;
-      expect(args).toContain('README.md');
+      expect(args).toContain(':(literal)README.md');
     });
   });
 
@@ -159,13 +159,11 @@ describe('executeAdd', () => {
   });
 
   describe('empty paths', () => {
-    it('handles empty paths array without all or update', async () => {
-      mockExecGit.mockResolvedValueOnce({ stdout: '', stderr: '' });
-
-      const result = await executeAdd({ paths: [] }, mockContext, mockExecGit);
-
-      expect(result.success).toBe(true);
-      expect(result.stagedFiles).toEqual([]);
+    it('rejects empty paths without an explicit all/update selection', async () => {
+      await expect(
+        executeAdd({ paths: [] }, mockContext, mockExecGit),
+      ).rejects.toThrow(/Explicit paths/);
+      expect(mockExecGit).not.toHaveBeenCalled();
     });
   });
 

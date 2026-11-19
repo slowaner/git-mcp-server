@@ -19,6 +19,7 @@ import {
 } from '../../../src/types-global/errors.js';
 import { ErrorHandler } from '../../../src/utils/internal/error-handler/index.js';
 import { logger } from '../../../src/utils/internal/logger.js';
+import { auditCorrelation } from '@/utils/internal/safe-audit.js';
 
 describe('ErrorHandler (unit)', () => {
   let getActiveSpanSpy: MockInstance;
@@ -212,11 +213,11 @@ describe('ErrorHandler (unit)', () => {
       const call = errorSpy.mock.calls[0];
       if (!call) throw new Error('errorSpy was not called');
       const [msg, ctx] = call;
-      expect(String(msg)).toContain('Error in explicitCodeTest:');
+      expect(msg).toBe('Operation failed.');
       expect(ctx).toMatchObject({
-        requestId: 'rid-1',
-        operation: 'explicitCodeTest',
-        critical: true,
+        requestCorrelation: auditCorrelation('requestId', 'rid-1'),
+        event: 'exception',
+        operation: 'internal',
         errorCode: JsonRpcErrorCode.ServiceUnavailable,
       });
       // stack should be omitted in logContext
@@ -240,7 +241,8 @@ describe('ErrorHandler (unit)', () => {
       const call = errorSpy.mock.calls[0];
       if (!call) throw new Error('errorSpy was not called');
       const [, ctx] = call;
-      const data = (ctx as Record<string, any>).errorData;
+      expect(ctx).not.toHaveProperty('errorData');
+      const data = (final as McpError).data;
       expect(data).toMatchObject({
         originalErrorName: 'McpError',
         originalMessage: 'oops',
@@ -277,14 +279,10 @@ describe('ErrorHandler (unit)', () => {
       const call = errorSpy.mock.calls[0];
       if (!call) throw new Error('errorSpy was not called');
       const [, ctx] = call;
-      const errorData = (ctx as Record<string, any>).errorData;
-      expect(errorData.rootCause).toEqual({
-        name: 'Error',
-        message: 'root-cause',
-      });
-      const loggedInput = (ctx as Record<string, unknown>).input;
-      expect(typeof loggedInput).toBe('function');
-      expect((loggedInput as Function).name).toBe('sampleFn');
+      expect(ctx).not.toHaveProperty('errorData');
+      expect(ctx).not.toHaveProperty('input');
+      expect(JSON.stringify(ctx)).not.toContain('root-cause');
+      expect(JSON.stringify(ctx)).not.toContain('OUTER_STACK');
     });
   });
 

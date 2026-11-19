@@ -21,6 +21,10 @@ export const ATTR_CODE_NAMESPACE = 'code.namespace';
  */
 export const ATTR_MCP_TOOL_INPUT_BYTES = 'mcp.tool.input_bytes';
 export const ATTR_MCP_TOOL_OUTPUT_BYTES = 'mcp.tool.output_bytes';
+/** True only when byte size was measured without unbounded serialization. */
+export const ATTR_MCP_TOOL_INPUT_SIZE_KNOWN = 'mcp.tool.input_size_known';
+/** Successful result metadata, not the JSON-RPC envelope/error response size. */
+export const ATTR_MCP_TOOL_OUTPUT_SIZE_KNOWN = 'mcp.tool.output_size_known';
 export const ATTR_MCP_TOOL_DURATION_MS = 'mcp.tool.duration_ms';
 export const ATTR_MCP_TOOL_SUCCESS = 'mcp.tool.success';
 export const ATTR_MCP_TOOL_ERROR_CODE = 'mcp.tool.error_code';
