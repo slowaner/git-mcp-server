@@ -20,8 +20,8 @@
  * // Exclude test files:
  * // npm run devdocs -- --exclude "*.test.ts" --exclude "*.spec.ts" src/
  */
-import clipboardy from 'clipboardy';
 import { execa } from 'execa';
+import { createRequire } from 'node:module';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -372,24 +372,16 @@ const exists = async (filePath: string): Promise<boolean> => {
 };
 
 /**
- * Matches file path against glob-like patterns.
+ * Matches literal path fragments and the * and ** glob wildcards.
  */
-const matchesPattern = (filePath: string, patterns: string[]): boolean => {
-  if (patterns.length === 0) return false;
-
-  for (const pattern of patterns) {
-    const regexPattern = pattern
-      .replace(/\./g, '\\.')
-      .replace(/\*\*/g, '.*')
-      .replace(/\*/g, '[^/]*');
-    const regex = new RegExp(`^${regexPattern}$`);
-
-    if (regex.test(filePath) || filePath.includes(pattern)) {
-      return true;
-    }
-  }
-  return false;
-};
+export const matchesPattern = (filePath: string, patterns: string[]): boolean =>
+  patterns.some(
+    (pattern) =>
+      filePath.includes(pattern) ||
+      new Bun.Glob(pattern.replaceAll(/[\\?[\]{}()+!@|]/g, '\\$&')).match(
+        filePath,
+      ),
+  );
 
 /**
  * Traverses up the directory tree to find the project root.
@@ -564,16 +556,24 @@ const generateFileTree = async (rootDir: string): Promise<string> => {
 /**
  * Analyzes a file for statistics.
  */
-const analyzeFile = async (
+export const analyzeFile = async (
   filePath: string,
 ): Promise<{ lines: number; size: number } | null> => {
   try {
-    const stats = await fs.stat(filePath);
-    if (!stats.isFile()) return null;
+    const file = await fs.open(
+      filePath,
+      fs.constants.O_RDONLY | fs.constants.O_NONBLOCK,
+    );
+    try {
+      const stats = await file.stat();
+      if (!stats.isFile()) return null;
 
-    const content = await fs.readFile(filePath, 'utf-8');
-    const lines = content.split('\n').length;
-    return { lines, size: stats.size };
+      const content = await file.readFile('utf-8');
+      const lines = content.split('\n').length;
+      return { lines, size: stats.size };
+    } finally {
+      await file.close();
+    }
   } catch {
     return null;
   }
@@ -808,6 +808,10 @@ const createDevDocsFile = async (
 const copyToClipboard = async (content: string): Promise<void> => {
   UI.printStep('Copying to clipboard...');
   try {
+    const require = createRequire(import.meta.url);
+    const { default: clipboardy } = require('clipboardy') as {
+      default: { write(text: string): Promise<void> };
+    };
     await clipboardy.write(content);
     UI.printSuccess('Copied to clipboard');
   } catch (_error) {
@@ -1005,8 +1009,9 @@ const main = async () => {
   UI.printFooter(true, outputPath);
 };
 
-// Entry point
-main().catch((error) => {
-  UI.printFatalError(error);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    UI.printFatalError(error);
+    process.exit(1);
+  });
+}

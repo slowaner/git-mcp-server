@@ -1,144 +1,157 @@
 ---
 name: release-and-publish
 description: >
-  Ship a release end-to-end across every registry this project targets (npm, MCP Registry). Runs the final verification gate, pushes commits and tags, then publishes to each applicable destination. Assumes git wrapup (version bumps, changelog, commit, annotated tag) is already complete — this skill is the post-wrapup publish workflow. Halts and alerts the user on the first failure.
+  Prepare an immutable bundle from an explicitly reviewed commit and annotated
+  version tag, then publish that exact bundle to npm and the MCP Registry only
+  with explicit publication authority. Stops on drift, failed checks or missing
+  destination receipts. Never fixes, commits, retags or pushes after review.
 metadata:
   author: cyanheads
-  version: '1.0'
+  version: '1.1.0'
   type: workflow
 ---
 
-## Preconditions
+## Authority and supported profile
 
-This skill runs **after** git wrapup. By the time it's invoked:
+Preparing a bundle does not authorize publication. Require an explicit user
+request naming the intended registries/namespaces before running `--publish`.
+The operator must control those namespaces and configure authentication separately.
+Do not retrieve credentials from Keychain, put tokens in arguments, provision
+accounts, change provider settings or infer authority from available credentials.
 
-- `package.json` version is bumped
-- `server.json` version is bumped (top-level + each package entry)
-- `CHANGELOG.md` has a new entry for this version with a concrete date (never `[Unreleased]`)
-- README badges and version-bearing files are in sync
-- Release commit (`chore: release v<version>`) exists
-- Annotated tag (`v<version>`) exists locally
-- Working tree is clean
+The automated release profile supports Linux x64 and macOS arm64 with the exact
+vendor Bun 1.4.3 and Gitleaks 8.30.1 archives. Publishing also requires the exact
+MCP publisher 1.8.7 archive. Read [toolchain pins](../../scripts/security/toolchain-pins.ts)
+for platform-specific URLs and SHA-256 values. No `latest`, global install or
+binary fallback. The running Bun must match the selected vendor archive bytes.
+Unsupported platforms or mismatched Homebrew/custom builds fail closed. Tool
+availability does not establish native security qualification: final release
+acceptance requires the unchanged arbitrary-byte filename oracle and complete
+suite on the supported Linux runner, including production UTF-8 failure/terminal
+request behavior. A supported-local profile with this case not run cannot grant
+release readiness.
 
-If any are missing, halt and tell the user to finish wrapup first. Do not attempt to redo wrapup work from inside this skill.
+Use an operator-controlled checkout and private output directory. The release
+runner does not sandbox arbitrary source code, native signing tools or the host.
+Fork PR security jobs receive read-only permissions and no publishing credentials.
 
-## Failure Protocol
+## Preparation before review and tag
 
-**Stop on the first non-zero exit.** No retries, no remediation from inside the skill. Report to the user:
-
-1. Which step failed
-2. The exact error output
-3. Which destinations already received the release (npm published? tag pushed?) so they know the partial state
-
-The user fixes locally and re-invokes, or runs the remaining steps manually. Publishes hard-fail with "version already exists" if replayed — that's the signal the step already succeeded.
-
-## Steps
-
-### 1. Sanity-check wrapup outputs
-
-Read `package.json` → capture `version`. Read `server.json` → verify top-level `version` matches and every `packages[].version` matches. Then verify git state:
-
-```bash
-git status --porcelain                         # must be empty — clean working tree
-git describe --exact-match --tags HEAD 2>&1    # must equal v<version>
-git rev-parse --abbrev-ref HEAD                # note the branch name
-```
-
-If working tree is dirty, HEAD isn't on `v<version>`, or `server.json` versions drift from `package.json`, halt.
-
-### 2. Run the verification gate
-
-All three must succeed:
+All metadata synchronization and auto-fixing belongs in development, before the
+final source commit, independent review and annotated tag:
 
 ```bash
+bun scripts/validate-mcp-publish-schema.ts --sync-only
 bun run devcheck
-bun run rebuild
-bun test
 ```
 
-Any non-zero exit → halt with the failing command's output.
+Metadata synchronization refuses a tagged HEAD and never commits. Preserve normal
+commit hooks and exact staged-tree secret scanning. Review the changed source,
+package/lock files, manifests and compatibility notes, then finish the source
+commit and independent review using the project's normal process. The annotated
+`v<version>` tag must point to that exact reviewed commit. Creating/pushing a tag
+is a separate authorized action; this skill never creates or moves refs.
 
-`devcheck` runs lint + format + typecheck + `bun audit`. `rebuild` is a clean + `bun build` to catch build-time regressions `devcheck` alone can miss.
+If review, source, metadata or lock inputs change, repeat affected gates and obtain
+a current review/tag. Never patch a release from inside the publish phase.
 
-### 3. Push to origin
+## Read-only gate and immutable bundle
+
+Download the exact archives from the pinned primary vendor URLs and verify their
+SHA-256 values before selecting them. Invoke the release runner with the verified
+vendor Bun binary:
 
 ```bash
-git push
-git push --tags
+bun scripts/release.ts \
+  --commit <full-reviewed-commit> --tag v<version> \
+  --output <absolute-private-directory-outside-checkout> \
+  --bun-archive <matching-platform-bun.zip> \
+  --gitleaks-archive <matching-platform-gitleaks.tar.gz>
 ```
 
-If the remote rejects either push, halt. On a fresh branch, `git push` may need `-u origin <branch>` — read the error and re-run if that's the only gap.
+Default mode prepares only; it performs no registry upload. It requires a clean
+checkout, matching annotated tag/object, exact package/lock/toolchain inputs and
+matching MCP metadata. It validates the vendored, digest-pinned MCP schema offline,
+installs the frozen lock without lifecycle scripts, runs read-only devcheck and
+tests, rebuilds and packs with lifecycle scripts disabled. A required native
+fixture tool missing from the supported profile is an incomplete gate, not a pass.
 
-### 4. Publish to npm
+The High/Critical all-lock audit policy is preserved. Structured lower-severity
+findings remain visible. Network/tool/permission/empty/malformed/partial/skipped
+audit results block. Optional `bun scripts/security-audit.ts --strict` blocks every
+severity; a threshold pass never means all vulnerabilities are absent.
+
+The bundle contains `source.tar`, exact `package.json`, `bun.lock`, `server.json`,
+a separately hashed canonical `registry-manifest.json`, `package.tgz`,
+`build.json`, `sbom.json`, `checks.json` and `provenance.json`.
+The registry payload omits only the legacy npm-only `mcpName` field; the original
+source manifest remains in the bundle with its own hash. The lock inventory covers
+all supported npm tuples, including development/build copies; it is not a runtime
+reachability finding. Packed files must match the checked build or reviewed source.
+The bundle receives its own archive-aware secret scan.
+
+Source export attributes (`export-ignore` or `export-subst`), submodules and
+control characters in source paths are unsupported and block preparation. The
+source archive must preserve the reviewed tree without export transformations.
+
+Save the printed `provenance.json` SHA-256 separately. Keep bundle bytes unchanged.
+No fixer, auto-commit, `--no-verify`, push or tag mutation is allowed after the
+source gate. Any failed command or source/tag/metadata/build drift stops the flow.
+
+## Explicit publication of the same bundle
+
+After separately authorized publication, reuse the existing output directory and
+its recorded manifest digest:
 
 ```bash
-bun publish --access public
+bun scripts/release.ts --publish \
+  --commit <same-reviewed-commit> --tag v<same-version> \
+  --output <same-private-bundle-directory> \
+  --bundle-sha256 <recorded-provenance-json-sha256> \
+  --bun-archive <same-platform-bun.zip> \
+  --gitleaks-archive <same-platform-gitleaks.tar.gz> \
+  --publisher-archive <matching-platform-mcp-publisher.tar.gz>
 ```
 
-`bun publish` uses whatever npm auth the user has configured in `~/.npmrc`. If 2FA is enabled on the npm account, the command will prompt for an OTP or open a browser — that's expected; the user completes it interactively.
+The runner refreshes read-only gates, verifies the exact existing bundle and
+revalidates source/tag and artifact hashes before each destination. npm receives
+the prebuilt tarball; the MCP publisher receives the bundle's registry manifest.
+Credentials must already be configured by the operator; the runner performs no
+automatic login or secret lookup.
 
-**Friction reducers (optional, configure once):**
+A successful upload command is not a verified receipt. npm metadata must match the
+exact name/version and its downloaded tarball SHA-256 must match the bundle. MCP
+verification uses the exact version endpoint and compares canonical server content.
+Each verified receipt is saved under the output directory's `.receipts` sibling
+before starting the next destination.
 
-| Option                                                                                           | How                                                                               |
-| :----------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------- |
-| **npm granular access token** with "Bypass 2FA for publish"                                      | Generate at npmjs.com → replace `_authToken` in `~/.npmrc` → no OTP prompt at all |
-| **1Password CLI TOTP injection** (requires `brew install --cask 1password-cli` + signed-in `op`) | `bun publish --access public --otp="$(op item get 'npm' --otp)"`                  |
+## Failure and partial publication
 
-Halt on publish error other than "version already exists" (which means this step already ran).
+Stop on the first failure. Never interpret duplicate-version text as proof of a
+previous success. Do not retry automatically, rebuild after one registry succeeds,
+or silently resume only the other destination. Preserve the bundle, its digest and
+saved receipts; report each destination as verified, failed or uncertain.
 
-### 5. Publish to MCP Registry
+A partial publication or existing version needs a separately reviewed recovery
+decision based on actual remote identities/bytes. No merge, force push, tag move,
+release creation or provider approval follows from a local check or receipt.
 
-```bash
-bun run publish-mcp
-```
+## CI evidence
 
-This repo's `publish-mcp` script is defined in `package.json` and runs `scripts/validate-mcp-publish-schema.ts` before invoking `mcp-publisher`. Reads `server.json` at the repo root.
+CI and Security workflows run on PRs including stacked targets and on main/security
+branch pushes. Reviewed action SHAs and platform-specific archive digests pin Bun,
+Gitleaks and CodeQL inputs. Frozen installation skips lifecycle scripts; any needed
+native generation requires an explicit reviewed step. Full current-tree secret
+scanning and actual outgoing commit metadata scans have no fixture exception.
+Scanner rules are the complete official 8.30.1 source, vendored without changes;
+SHA-256, byte count and Git blob are checked before explicit configuration.
+The history-only gate supports full descendant closures of its reviewed immutable
+anchor, including first-parent merge diff presentation without restricting
+traversal. It requires exactly both independently assessed immutable occurrences,
+each once, as `accepted-history-fixtures`, count2. Missing, duplicate, extra,
+malformed or zero findings and incomplete/altered scope block. This status is
+distinct from zero findings; other histories require a separate policy decision.
 
-Prereqs:
-
-- A GitHub PAT with `read:org` + `read:user` scopes, reachable by the `publish-mcp` script (conventionally stored in Keychain under service `mcp-publisher-github-pat` on macOS)
-- `mcp-publisher` CLI installed (`npm i -g mcp-publisher` or `brew install mcp-publisher`)
-
-If the Keychain entry doesn't exist:
-
-```bash
-security add-generic-password -a "$USER" -s mcp-publisher-github-pat -w
-# paste PAT at the silent prompt
-```
-
-Halt on any publisher error other than "cannot publish duplicate version".
-
-### 6. Report the deployed artifacts
-
-Print clickable URLs for every destination that succeeded:
-
-- **npm:** `https://www.npmjs.com/package/@cyanheads/git-mcp-server/v/<version>`
-- **MCP Registry:** `https://registry.modelcontextprotocol.io/v0/servers?search=io.github.cyanheads/git-mcp-server`
-- **GitHub release tag:** `https://github.com/cyanheads/git-mcp-server/releases/tag/v<version>`
-
-Skip any destination that was skipped or failed in its step.
-
-## Optional: Create a GitHub Release
-
-The annotated tag is enough for npm/MCP Registry. A GitHub Release adds a human-readable changelog page and optional assets. Skip unless the project publishes releases to GitHub Releases specifically.
-
-```bash
-gh release create "v<version>" \
-  --title "v<version>" \
-  --notes-file <(awk "/^## v<version>/,/^## v/" CHANGELOG.md | sed '$d')
-```
-
-The `awk` expression extracts just the current version's section from `CHANGELOG.md`.
-
-## Checklist
-
-- [ ] Working tree clean; HEAD tagged `v<version>`
-- [ ] `package.json` and `server.json` versions match
-- [ ] `bun run devcheck` passes
-- [ ] `bun run rebuild` succeeds
-- [ ] `bun test` passes
-- [ ] `git push` succeeds
-- [ ] `git push --tags` succeeds
-- [ ] `bun publish --access public` succeeds
-- [ ] `bun run publish-mcp` succeeds
-- [ ] Deployed artifact URLs reported to the user
+CI configuration, generated SBOMs and helper tests alone do not prove workflow
+execution, native-platform coverage, independent review or registry publication.
+Record actual job/head/tool evidence and any incomplete/blocked gates.
