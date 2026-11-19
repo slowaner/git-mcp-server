@@ -1,5 +1,5 @@
 /**
- * @fileoverview Validated operator policy and early Git profile assertion.
+ * @fileoverview Validated native Git settings and request limits.
  * @module services/git/providers/cli/utils/configured-execution-policy
  */
 import { config } from '@/config/index.js';
@@ -13,7 +13,6 @@ import {
 /** Stable G1 seam, callable before any repository discovery or filesystem work. */
 export function getConfiguredGitExecutionPolicy(): GitExecutionPolicy {
   return {
-    profile: config.git.executionProfile,
     binaryPath: config.git.binaryPath,
     homeDirectory: config.git.trustedHome,
     helperPath: config.git.trustedPath,

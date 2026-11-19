@@ -173,23 +173,7 @@ describe('environment-independent authentication configuration', () => {
         else process.env.NODE_ENV = saved;
       }
     });
-  it('requires HTTPS OAuth anchors, audience and explicit grants', () => {
-    const oauth = {
-      ...valid,
-      mcpAuthMode: 'oauth' as const,
-      oauthIssuerUrl: 'https://issuer.example.test',
-      oauthAudience: 'git-fixture',
-    };
-    expect(() => validateAuthenticationConfiguration(oauth)).not.toThrow();
-    for (const override of [
-      { oauthIssuerUrl: 'http://issuer.example.test' },
-      { oauthJwksUri: 'http://keys.example.test' },
-      { oauthJwksUri: 'https://user:password@example.test' },
-      { oauthAudience: undefined },
-    ])
-      expect(() =>
-        validateAuthenticationConfiguration({ ...oauth, ...override }),
-      ).toThrow();
+  it('rejects invalid explicit repository grants', () => {
     for (const value of [undefined, '', '{}', '[]', '[{}]'])
       expect(() => parseRepositoryGrants(value)).toThrow();
   });

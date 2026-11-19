@@ -8,8 +8,6 @@ import {
   currentServerSessionId,
 } from '@/mcp-server/transports/auth/lib/requestIdentity.js';
 import { sessionWorkingDirectoryKey } from '@/mcp-server/transports/auth/lib/verifiedPrincipal.js';
-import { installTrustedGitFixture } from '../definitions/helpers/testContext.js';
-installTrustedGitFixture();
 
 import {
   resolveWorkingDirectory,

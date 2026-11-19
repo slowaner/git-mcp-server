@@ -212,7 +212,6 @@ describe('closed explicit empty-tag push', { timeout: 30000 }, () => {
     );
     env = buildTrustedGitEnvironment(
       {
-        profile: 'trusted',
         binaryPath: '/usr/bin/git',
         homeDirectory: home,
         helperPath: '/usr/bin:/bin',
@@ -238,7 +237,6 @@ describe('closed explicit empty-tag push', { timeout: 30000 }, () => {
       { mode: 0o700 },
     );
     Object.assign(config.git, {
-      executionProfile: 'trusted',
       binaryPath: binary,
       trustedHome: home,
       trustedPath: '/usr/bin:/bin',
@@ -300,19 +298,19 @@ describe('closed explicit empty-tag push', { timeout: 30000 }, () => {
     assert.equal(calls(), '');
   });
 
-  it('rejects restricted before filesystem discovery or native execution', async () => {
-    config.git.executionProfile = 'restricted';
+  it('rejects invalid execution settings before discovery or native execution', async () => {
+    config.git.binaryPath = 'relative-git';
     const missing = join(root, 'never-created');
     await assert.rejects(
       authorizeEmptyTagPushDestination('origin', missing),
-      reason('POLICY_UNSUPPORTED'),
+      reason('INVALID_EXECUTION_OPTIONS'),
     );
     await assert.rejects(
       new CliGitProvider().push(
         { tags: true },
         { ...context(), workingDirectory: missing },
       ),
-      reason('POLICY_UNSUPPORTED'),
+      reason('INVALID_EXECUTION_OPTIONS'),
     );
     assert.equal(existsSync(missing), false);
     assert.equal(calls(), '');

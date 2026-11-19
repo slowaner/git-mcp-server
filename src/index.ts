@@ -27,7 +27,6 @@ if (isStdioMode || isHttpModeWithoutTty) {
 
 // CRITICAL: reflect-metadata must be imported FIRST, before any module that uses tsyringe
 import 'reflect-metadata';
-import { shutdownOpenTelemetry } from '@/utils/telemetry/instrumentation.js';
 
 import {
   initializePerformance_Hrt,
@@ -78,8 +77,7 @@ const shutdown = async (signal: string): Promise<void> => {
       shutdownContext,
     );
 
-    // Shutdown OpenTelemetry and logger last to ensure all telemetry and logs are sent.
-    await shutdownOpenTelemetry();
+    // Flush local logs after the transport stops.
     await logger.close();
 
     process.exit(0);
@@ -110,8 +108,6 @@ const start = async (): Promise<void> => {
       // The config module already logged the details. We just provide a final message.
       console.error('Halting due to critical configuration error.');
     }
-    // Ensure OpenTelemetry is shut down if it was started before the error
-    await shutdownOpenTelemetry();
     process.exit(1);
   }
 
@@ -213,7 +209,7 @@ const start = async (): Promise<void> => {
       error as Error,
       startupContext,
     );
-    await shutdownOpenTelemetry(); // Attempt to flush any startup-related traces
+    await logger.close();
     process.exit(1);
   }
 };

@@ -5,7 +5,6 @@
 import { config } from '@/config/index.js';
 process.stdout.write(
   JSON.stringify({
-    profile: config.git.executionProfile,
     binaryPath: config.git.binaryPath,
     trustedHome: config.git.trustedHome,
     runtime: process.versions.bun ? 'bun' : 'node',

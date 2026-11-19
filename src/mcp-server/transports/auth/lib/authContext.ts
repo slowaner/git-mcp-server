@@ -9,6 +9,9 @@
  */
 import { AsyncLocalStorage } from 'async_hooks';
 
+import type { StorageService } from '@/storage/core/StorageService.js';
+import type { SessionWorkingDirectoryWrites } from '@/storage/core/sessionWorkingDirectoryStore.js';
+
 import type { AuthInfo } from './authTypes.js';
 import type { VerifiedPrincipal } from './verifiedPrincipal.js';
 
@@ -22,6 +25,8 @@ export interface AuthStore {
   readonly sessionId?: string;
   readonly repositoryRoots?: readonly string[];
   readonly transport?: 'http' | 'stdio';
+  readonly stdioWorkingDirectoryStorage?: StorageService;
+  readonly cwdWrites?: SessionWorkingDirectoryWrites;
 }
 
 /**

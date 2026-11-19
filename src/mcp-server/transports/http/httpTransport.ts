@@ -22,7 +22,10 @@ import { randomUUID } from 'node:crypto';
 import { container } from 'tsyringe';
 import { StorageService as StorageServiceToken } from '@/container/tokens.js';
 import type { StorageService } from '@/storage/core/StorageService.js';
-import { SessionWorkingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
+import {
+  SessionWorkingDirectoryStore,
+  SessionWorkingDirectoryWrites,
+} from '@/storage/core/sessionWorkingDirectoryStore.js';
 import {
   currentPrincipal,
   hostPrincipal,
@@ -30,7 +33,7 @@ import {
 import { parseRepositoryGrants } from '../auth/lib/authConfiguration.js';
 import type { VerifiedPrincipal } from '../auth/lib/verifiedPrincipal.js';
 import { getConfiguredRepositoryPolicy } from '@/services/git/core/configured-repository-policy.js';
-import { HttpAdmission } from './httpAdmission.js';
+import { HttpAdmission, type AdmissionRelease } from './httpAdmission.js';
 import {
   checkContentLength,
   HttpLimitError,
@@ -61,32 +64,24 @@ import {
 
 /** Factory function that creates a fully-configured McpServer instance. */
 export type McpServerFactory = () => Promise<McpServer>;
-const appManagers = new WeakMap<
-  Hono<{ Bindings: HonoNodeBindings }>,
-  SessionManager
->();
+type HttpAppEnv = {
+  Bindings: HonoNodeBindings;
+  Variables: { releaseStream: AdmissionRelease | undefined };
+};
+type HttpApp = Hono<HttpAppEnv>;
+
+const appManagers = new WeakMap<HttpApp, SessionManager>();
 const serverManagers = new WeakMap<ServerType, SessionManager>();
-const appDisposers = new WeakMap<
-  Hono<{ Bindings: HonoNodeBindings }>,
-  () => Promise<void>
->();
-const serverApps = new WeakMap<
-  ServerType,
-  Hono<{ Bindings: HonoNodeBindings }>
->();
-const defaultAppHosts = new WeakMap<
-  Hono<{ Bindings: HonoNodeBindings }>,
-  string[]
->();
+const appDisposers = new WeakMap<HttpApp, () => Promise<void>>();
+const serverApps = new WeakMap<ServerType, HttpApp>();
+const defaultAppHosts = new WeakMap<HttpApp, string[]>();
 const loopbackAuthorities = (port: number) =>
   ['localhost', '127.0.0.1', '[::1]'].map(
     (host) => new URL(`http://${host}:${port}`).host,
   );
 
 /** Close every per-app session and timer; used by shutdown and embedded hosts. */
-export async function closeHttpApp(
-  app: Hono<{ Bindings: HonoNodeBindings }>,
-): Promise<void> {
+export async function closeHttpApp(app: HttpApp): Promise<void> {
   await appDisposers.get(app)?.();
 }
 
@@ -94,7 +89,7 @@ export async function closeHttpApp(
 export function createHttpApp(
   createMcpServer: McpServerFactory,
   parentContext: RequestContext,
-): Hono<{ Bindings: HonoNodeBindings }> {
+): HttpApp {
   const authStrategy = createAuthStrategy();
   const grants = authStrategy
     ? parseRepositoryGrants(config.mcpRepositoryGrants)
@@ -102,7 +97,7 @@ export function createHttpApp(
   grants?.validateRoots((roots) => {
     getConfiguredRepositoryPolicy().restrict(roots);
   });
-  const app = new Hono<{ Bindings: HonoNodeBindings }>();
+  const app = new Hono<HttpAppEnv>();
   const transportContext = {
     ...parentContext,
     component: 'HttpTransportSetup',
@@ -113,7 +108,10 @@ export function createHttpApp(
   const transports = new Map<string, StreamableHTTPTransport>();
   const servers = new Map<string, McpServer>();
   const sessionReleases = new Map<string, () => void>();
-  const sessionOwners = new Map<string, VerifiedPrincipal>();
+  const sessions = new Map<
+    string,
+    { owner: VerifiedPrincipal; cwdWrites: SessionWorkingDirectoryWrites }
+  >();
   const admission = new HttpAdmission(config.httpSecurity);
   const policy = config.httpSecurity;
   const hosts = policy.allowedHosts.length
@@ -129,17 +127,30 @@ export function createHttpApp(
     const pending = (async () => {
       const transport = transports.get(sid);
       const server = servers.get(sid);
-      const owner = sessionOwners.get(sid);
-      sessionOwners.delete(sid);
+      const session = sessions.get(sid);
+      const drained = session?.cwdWrites.close();
+      sessions.delete(sid);
       transports.delete(sid);
       servers.delete(sid);
       sessionManager.terminateSession(sid);
-      // Release only after close completes; failed close must not open new capacity.
       try {
         await server?.close();
         await transport?.close();
-        sessionReleases.get(sid)?.();
-        sessionReleases.delete(sid);
+      } catch {
+        // Failed closes continue to count against session capacity.
+        logger.warning('HTTP session close failed', transportContext);
+        return;
+      }
+
+      try {
+        if ((await drained) === false) {
+          logger.warning(
+            'Skipped HTTP cwd deletion because a mutation outcome was unconfirmed',
+            transportContext,
+          );
+          return;
+        }
+        const owner = session?.owner;
         if (owner && container.isRegistered(StorageServiceToken)) {
           const storage =
             container.resolve<StorageService>(StorageServiceToken);
@@ -151,11 +162,18 @@ export function createHttpApp(
                 owner,
                 sid,
                 transportContext,
-              ).clear(),
+              ).clear(AbortSignal.timeout(policy.requestTimeoutMs)),
           );
         }
       } catch {
-        logger.warning('HTTP session cleanup failed', transportContext);
+        logger.warning(
+          'HTTP working-directory cleanup failed',
+          transportContext,
+        );
+      } finally {
+        // Retain the lease during cleanup to bound outstanding storage deletes.
+        sessionReleases.get(sid)?.();
+        sessionReleases.delete(sid);
       }
     })();
     cleanupTasks.set(sid, pending);
@@ -241,25 +259,6 @@ export function createHttpApp(
   // Health check — unprotected
   app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
-  // RFC 9728 Protected Resource Metadata endpoint (MCP 2025-06-18)
-  // Must be accessible without authentication for discovery
-  app.get('/.well-known/oauth-protected-resource', (c) => {
-    if (!config.oauthIssuerUrl) {
-      return c.json(
-        { error: 'OAuth not configured on this server' },
-        { status: 404 },
-      );
-    }
-
-    return c.json({
-      resource: config.mcpServerResourceIdentifier || config.oauthAudience,
-      authorization_servers: [config.oauthIssuerUrl],
-      bearer_methods_supported: ['header'],
-      resource_signing_alg_values_supported: ['RS256', 'ES256', 'PS256'],
-      ...(config.oauthJwksUri && { jwks_uri: config.oauthJwksUri }),
-    });
-  });
-
   // Create auth strategy and middleware if auth is enabled
   if (authStrategy) {
     const authMiddleware = createAuthMiddleware(authStrategy, grants!);
@@ -282,7 +281,8 @@ export function createHttpApp(
   app.use(config.mcpHttpEndpointPath, async (c, next) => {
     const sid = c.req.header('mcp-session-id');
     if (sid) {
-      if (!sessionManager.isSessionOwner(sid, currentPrincipal()))
+      const session = sessions.get(sid);
+      if (!session || !sessionManager.isSessionOwner(sid, currentPrincipal()))
         return c.json(
           {
             jsonrpc: '2.0',
@@ -295,7 +295,11 @@ export function createHttpApp(
           404,
         );
       return authContext.run(
-        { ...authContext.getStore(), sessionId: sid },
+        {
+          ...authContext.getStore(),
+          sessionId: sid,
+          cwdWrites: session.cwdWrites,
+        },
         next,
       );
     }
@@ -305,17 +309,22 @@ export function createHttpApp(
   // No queue: admission fails immediately. Leases persist through response streams.
   app.use(config.mcpHttpEndpointPath, async (c, next) => {
     if (closing) throw new HttpLimitError(503, 'HTTP app is closing.');
-    const release = admission.acquire('requests', principal());
+    const releaseRequest = admission.acquire('requests', principal());
     try {
       await next();
+      const releaseStream = c.get('releaseStream');
       c.res = boundResponseLifetime(
         c.res,
-        release,
-        policy.requestTimeoutMs,
+        () => {
+          releaseStream?.();
+          releaseRequest();
+        },
+        releaseStream ? policy.streamTimeoutMs : policy.requestTimeoutMs,
         c.req.raw.signal,
       );
     } catch (error) {
-      release();
+      c.get('releaseStream')?.();
+      releaseRequest();
       throw error;
     }
   });
@@ -386,12 +395,13 @@ export function createHttpApp(
     const release = admission.acquire('streams', principal());
     try {
       const response = await transportOrError.handleRequest(c.req.raw);
-      return boundResponseLifetime(
-        response,
-        release,
-        policy.streamTimeoutMs,
-        c.req.raw.signal,
-      );
+      const mediaType = response.headers.get('content-type')?.split(';', 1)[0];
+      if (mediaType === 'text/event-stream') {
+        c.set('releaseStream', release);
+      } else {
+        release();
+      }
+      return response;
     } catch (error) {
       release();
       throw error;
@@ -463,7 +473,7 @@ export function createHttpApp(
             policy.requestTimeoutMs,
           );
         } catch (error) {
-          // Close cancelled transport correlations; reconnect requires initialization.
+          // Only an HTTP deadline or disconnect invalidates the transport.
           if (error instanceof HttpLimitError && error.status === 408)
             await cleanup(sessionId);
           throw error;
@@ -508,6 +518,9 @@ export function createHttpApp(
         const activeServer = server;
         const newSessionId = randomUUID();
         const owner = currentPrincipal();
+        const cwdWrites = new SessionWorkingDirectoryWrites(
+          policy.requestTimeoutMs,
+        );
         transport = new StreamableHTTPTransport({
           enableJsonResponse: true,
           maxRequestBodySize: policy.maxBodyBytes,
@@ -517,7 +530,7 @@ export function createHttpApp(
             transports.set(sid, transport!);
             servers.set(sid, activeServer);
             sessionReleases.set(sid, releaseSession!);
-            sessionOwners.set(sid, owner);
+            sessions.set(sid, { owner, cwdWrites });
             sessionManager.createSession(
               sid,
               owner.clientId,
@@ -540,7 +553,7 @@ export function createHttpApp(
 
         const activeTransport = transport;
         const response = await authContext.run(
-          { ...authContext.getStore(), sessionId: newSessionId },
+          { ...authContext.getStore(), sessionId: newSessionId, cwdWrites },
           async () => {
             await activeServer.connect(activeTransport);
             return dispatchWithDeadline(
@@ -608,7 +621,7 @@ async function isPortInUse(
 }
 
 function startHttpServerWithRetry(
-  app: Hono<{ Bindings: HonoNodeBindings }>,
+  app: HttpApp,
   initialPort: number,
   host: string,
   maxRetries: number,
@@ -716,9 +729,11 @@ export async function startHttpTransport(
   if (server instanceof http.Server) {
     server.requestTimeout = config.httpSecurity.bodyTimeoutMs;
     server.headersTimeout = Math.min(config.httpSecurity.bodyTimeoutMs, 60000);
-    server.setTimeout(config.httpSecurity.requestTimeoutMs, (socket) =>
-      socket.destroy(),
+    const idleTimeoutMs = Math.max(
+      config.httpSecurity.requestTimeoutMs,
+      config.httpSecurity.streamTimeoutMs,
     );
+    server.setTimeout(idleTimeoutMs, (socket) => socket.destroy());
   }
   server.maxConnections =
     config.httpSecurity.maxRequests + config.httpSecurity.maxStreams;

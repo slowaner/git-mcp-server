@@ -4,7 +4,6 @@
  */
 import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { installTrustedGitFixture } from '../helpers/testContext.js';
 import { container } from 'tsyringe';
 
 import { gitSetWorkingDirTool } from '@/mcp-server/tools/definitions/git-set-working-dir.tool.js';
@@ -91,8 +90,6 @@ function primeSnapshotMocks(
   mockProvider.tag.mockResolvedValue(tagResult);
   mockProvider.remote.mockResolvedValue(remoteResult);
 }
-
-installTrustedGitFixture();
 
 describe('git_set_working_dir tool', () => {
   const mockProvider = createMockGitProvider();

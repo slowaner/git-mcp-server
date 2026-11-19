@@ -55,7 +55,6 @@ describe('native review consumer regressions', { timeout: 30000 }, () => {
     );
     env = buildTrustedGitEnvironment(
       {
-        profile: 'trusted',
         binaryPath: '/usr/bin/git',
         homeDirectory: home,
         helperPath: '/usr/bin:/bin',
@@ -65,7 +64,6 @@ describe('native review consumer regressions', { timeout: 30000 }, () => {
     git('init', '-q', '--initial-branch=feature');
     git('commit', '--allow-empty', '-m', 'ordinary');
     Object.assign(config.git, {
-      executionProfile: 'trusted',
       binaryPath: '/usr/bin/git',
       trustedHome: home,
       trustedPath: '/usr/bin:/bin',

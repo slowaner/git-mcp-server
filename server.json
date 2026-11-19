@@ -62,7 +62,7 @@
       "environmentVariables": [
         {
           "name": "MCP_HTTP_HOST",
-          "description": "The hostname for the HTTP server.",
+          "description": "The HTTP listen address. Must be 127.0.0.1.",
           "format": "string",
           "isRequired": false,
           "default": "127.0.0.1"
@@ -83,7 +83,7 @@
         },
         {
           "name": "MCP_AUTH_MODE",
-          "description": "Authentication mode to use: 'none', 'jwt', or 'oauth'.",
+          "description": "HTTP authentication mode: 'none' or 'jwt'.",
           "format": "string",
           "isRequired": false,
           "default": "none"
@@ -104,7 +104,7 @@
       ],
       "transport": {
         "type": "streamable-http",
-        "url": "http://localhost:3015/mcp"
+        "url": "http://127.0.0.1:3015/mcp"
       }
     }
   ],

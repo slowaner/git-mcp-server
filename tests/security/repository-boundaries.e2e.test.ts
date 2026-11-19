@@ -17,9 +17,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
-  renameSync,
   symlinkSync,
-  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -85,10 +83,8 @@ describe('production STDIO repository confinement', () => {
   async function withClient(
     overrides: Record<string, string>,
     body: (client: Client) => Promise<void>,
-    restricted = false,
   ): Promise<void> {
     const environment = { ...env, ...overrides };
-    if (restricted) delete environment.GIT_EXECUTION_PROFILE;
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [bundle],
@@ -168,7 +164,6 @@ describe('production STDIO repository confinement', () => {
       STORAGE_PROVIDER_TYPE: 'in-memory',
       GIT_BASE_DIR: `${first},${second}`,
       GIT_SIGN_COMMITS: 'false',
-      GIT_EXECUTION_PROFILE: 'trusted',
       GIT_BINARY_PATH: '/usr/bin/git',
       GIT_TRUSTED_HOME: home,
       GIT_TRUSTED_PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
@@ -608,48 +603,6 @@ describe('production STDIO repository confinement', () => {
         ).toBe('main');
       },
     );
-    expect(treeHash(outside)).toBe(before);
-  }, 30000);
-
-  it('fails closed in default restricted profile before init or clone creates a leaf', async () => {
-    const parent = join(second, 'raced-parent');
-    const parked = join(second, 'raced-parent-parked');
-    mkdirSync(parent);
-    const initialized = join(parent, 'restricted-init');
-    const cloned = join(parent, 'restricted-clone');
-    const before = treeHash(outside);
-    let linked = false;
-    const swap = setInterval(() => {
-      if (linked) {
-        unlinkSync(parent);
-        renameSync(parked, parent);
-      } else {
-        renameSync(parent, parked);
-        symlinkSync(outside, parent);
-      }
-      linked = !linked;
-    }, 2);
-    try {
-      await withClient(
-        {},
-        async (client) => {
-          const init = await request(client, 'git_init', { path: initialized });
-          expect(existsSync(initialized)).toBe(false);
-          denied(init);
-          denied(
-            await request(client, 'git_clone', { url: repo, path: cloned }),
-          );
-          expect(existsSync(cloned)).toBe(false);
-        },
-        true,
-      );
-    } finally {
-      clearInterval(swap);
-      if (linked) {
-        unlinkSync(parent);
-        renameSync(parked, parent);
-      }
-    }
     expect(treeHash(outside)).toBe(before);
   }, 30000);
 });
