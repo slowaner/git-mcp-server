@@ -100,9 +100,8 @@ timeout uses the larger of the request and stream deadlines.
 `httpPrincipalKey()` is the identity adapter for admission. Only authenticated
 middleware context supplies its tuple; no token, caller header, body field or
 forwarded address is an admission identity. All anonymous clients share one
-budget. This HTTP foundation does not itself add tenant repository ACLs or session
-owner authorization. Deployments requiring those properties also need the auth
-and session isolation remediation in the dependent security stack.
+budget. In JWT mode, repository grants and session ownership follow the verified
+principal. See [authentication and sessions](security/auth-sessions.md).
 
 ## Locked runtime dependencies
 

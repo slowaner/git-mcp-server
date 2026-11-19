@@ -37,10 +37,10 @@ This document defines the operational rules for contributing to this codebase. F
    - Use `StorageService` (injected via DI) for session state (working directory persistence).
    - Git operations execute via the `IGitProvider` interface, not direct CLI calls.
 
-5. **Graceful Degradation in Development**
-   - When `tenantId` is missing, default to permissive behavior: `const tenantId = appContext.tenantId || 'default-tenant';`
-   - Auth/scope checks default to allowed when auth is disabled.
-   - Production environments with auth enabled provide real `tenantId` from JWT claims automatically.
+5. **Explicit Authentication Authority**
+   - Enabled HTTP auth requires the verified principal/tenant in async-local context; missing identity fails closed in every environment.
+   - STDIO uses the explicit server-owned host policy; `none` HTTP mode is deliberately anonymous.
+   - Never obtain identity or repository grants from tool inputs, headers, or caller-provided context. See `docs/security/auth-sessions.md`.
 
 ---
 
@@ -338,7 +338,7 @@ const responseFormatter = createJsonFormatter<ToolOutput>({
 
 ### Working Directory Resolution
 
-Handled automatically by `createToolHandler`. When `input.path` is `'.'`, it loads from session storage using key `session:workingDir:{tenantId}`. When it's an absolute path, it's used directly. All paths are sanitized to prevent directory traversal.
+Handled automatically by `createToolHandler`. When `input.path` is `'.'`, it loads principal/server-session cwd through `workingDirectoryStore`; legacy tenant-wide state is ignored. Direct and persisted paths both use the canonical repository capability and current grant restriction.
 
 ---
 
@@ -441,18 +441,18 @@ Resources follow the same pattern as tools with a declarative `ResourceDefinitio
 ### HTTP Transport
 
 - **Modes:** `MCP_AUTH_MODE` accepts `none` or `jwt`. HTTP listens only on `127.0.0.1`.
-- **JWT mode:** Uses `MCP_AUTH_SECRET_KEY`. In dev without the secret, verification is bypassed.
-- **Extracted claims:** `clientId`, `scopes`, `subject`, `tenantId` (from `'tid'` claim).
+- **JWT mode:** Requires a random 32+ UTF-8 byte `MCP_AUTH_SECRET_KEY`, `MCP_AUTH_ISSUER` and `MCP_AUTH_AUDIENCE` in every environment. Verification uses HS256.
+- **Extracted claims:** Required stable issuer/tenant/client/subject tuple, nonempty scopes, integer `iat`/`exp` and bounded lifetime. HTTP also requires exact operator `MCP_REPOSITORY_GRANTS` within the global root ceiling.
 - **Scope enforcement:** Always wrap logic with `withToolAuth` or `withResourceAuth`. Defaults to allowed when auth is disabled.
 
 ### STDIO Transport
 
-No HTTP-based auth. Authorization handled by the host application.
+The host application authorizes STDIO. Each connection keeps its working directory in memory, independent of the configured persistent storage provider.
 
 ### HTTP Endpoints
 
 - `GET /healthz` — Unprotected health check
-- `GET /mcp` — Streamable HTTP event stream (protected when auth is enabled).
+- `GET /mcp` — Auth-protected when enabled; session stream requires the current owner
 - `POST /mcp` — JSON-RPC transport (protected when auth enabled)
 - `DELETE /mcp` — Session termination (MCP Spec 2025-06-18)
 - CORS enabled via `MCP_ALLOWED_ORIGINS` or `'*'` fallback
@@ -498,7 +498,7 @@ All configuration validated via Zod in `src/config/index.ts`. Derives `serviceNa
 | Category      | Variables                                                                                                                                                                                                                                                  |
 | :------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Transport** | `MCP_TRANSPORT_TYPE` (`stdio`/`http`), `MCP_HTTP_PORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PATH`                                                                                                                                                                   |
-| **Auth**      | `MCP_AUTH_MODE` (`none`/`jwt`), `MCP_AUTH_SECRET_KEY`                                                                                                                                                                                                      |
+| **Auth**      | `MCP_AUTH_MODE` (`none`/`jwt`), `MCP_AUTH_SECRET_KEY`, `MCP_AUTH_ISSUER`, `MCP_AUTH_AUDIENCE`, `MCP_REPOSITORY_GRANTS`                                                                                                                                     |
 | **Storage**   | `STORAGE_PROVIDER_TYPE` (`in-memory`/`filesystem`), `STORAGE_FILESYSTEM_PATH`                                                                                                                                                                              |
 | **Git**       | `GIT_PROVIDER` (`auto`/`cli`/`isomorphic`), `GIT_SIGN_COMMITS`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`, `GIT_BASE_DIR`, `GIT_MAX_COMMAND_TIMEOUT_MS`, `GIT_MAX_BUFFER_SIZE_MB`, `GIT_WRAPUP_INSTRUCTIONS_PATH` |
 | **Telemetry** | `OTEL_ENABLED`, `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`                                                                                                                                                                                                |
@@ -519,10 +519,10 @@ All configuration validated via Zod in `src/config/index.ts`. Derives `serviceNa
 
 ## XIII. Multi-Tenancy
 
-- `StorageService` requires `context.tenantId` — throws `McpError` if missing.
-- In HTTP + auth mode, `tenantId` is automatically extracted from JWT `'tid'` claim.
-- In development (STDIO/no auth), use graceful degradation: `appContext.tenantId || 'default-tenant'`.
-- The `createToolHandler` factory handles this pattern for you — `resolveWorkingDirectory` applies it internally.
+- Enabled-auth `StorageService` derives tenant identity from the verified store and rejects context overrides.
+- JWT/OAuth require `'tid'`; missing tenant never maps to a shared default.
+- Cwd tools/resources use `workingDirectoryStore` with verified principal and server-generated UUID. Same-tenant sessions are independent; legacy cwd is deliberately discarded.
+- STDIO and anonymous HTTP use the explicit host policy. Backend constraint/consistency qualification is documented in `docs/security/auth-sessions.md`.
 
 ---
 

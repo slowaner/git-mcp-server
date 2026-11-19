@@ -80,7 +80,8 @@ Bun users: replace `"command": "npx"` with `"command": "bunx"`.
 
 The first `GIT_BASE_DIR` entry anchors relative repository paths. Use an
 absolute path to select a repository under another entry, or use
-`git_set_working_dir` and then pass `.` for the session directory.
+`git_set_working_dir` and then pass `.` for the session directory. STDIO keeps
+that selection in memory for the current connection.
 Roots limit the paths accepted by the server. Git and its helpers run with the
 operator's OS permissions.
 
@@ -89,9 +90,10 @@ For local Streamable HTTP, set `MCP_TRANSPORT_TYPE=http` and connect to
 `MCP_HTTP_PORT` to choose another port. The same directory rules apply.
 
 To authenticate HTTP requests with a locally signed token, set
-`MCP_AUTH_MODE=jwt` and supply a random `MCP_AUTH_SECRET_KEY`. Send the token
-as `Authorization: Bearer <token>`. Include a client ID and the scopes needed
-by your tools, such as `tool:git:read` for `git_status`.
+`MCP_AUTH_MODE=jwt` and configure the shared secret, issuer, audience, and
+repository grants. Send the token as `Authorization: Bearer <token>`. See
+[authentication and sessions](docs/security/auth-sessions.md) for the required
+claims and grant format.
 
 See the [native Git execution policy](docs/security/git-execution.md) for
 platform support and environment configuration.
@@ -120,7 +122,7 @@ Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template).
 - All file paths are validated and sanitized to prevent directory traversal.
 - Optional `GIT_BASE_DIR` restricts Git paths and repository metadata to one or more explicitly allowed directory trees.
 - Git commands use validated arguments via process spawning — no shell interpolation.
-- Local JWT verification and scope checks in `jwt` mode.
+- Authenticated HTTP uses local JWT with an explicit issuer and audience, bounded tokens, and exact principal repository grants. See [authentication and sessions](docs/security/auth-sessions.md).
 - Optional rate limiting via the DI-managed `RateLimiter` service.
 - All operations are logged with request context for auditing.
 
@@ -157,7 +159,7 @@ All configuration is validated at startup in `src/config/index.ts`. Key environm
 | `GIT_AUTHOR_EMAIL`             | Git author email. Aliases: `GIT_EMAIL`, `GIT_USER_EMAIL`. Falls back to global git config.                                                                                                                   | `(none)`    |
 | `GIT_BASE_DIR`                 | Comma-separated absolute directories; the first anchors relative paths. Tilde expansion is supported. Filesystem roots and literal commas are disallowed.                                                    | `(none)`    |
 | `GIT_WRAPUP_INSTRUCTIONS_PATH` | Path to custom markdown file with workflow instructions.                                                                                                                                                     | `(none)`    |
-| `MCP_AUTH_SECRET_KEY`          | Shared JWT secret. Set a random secret of at least 32 bytes for `jwt` mode.                                                                                                                                  | `(none)`    |
+| `MCP_AUTH_SECRET_KEY`          | Random shared secret of at least 32 UTF-8 bytes for `jwt` mode.                                                                                                                                              | `(none)`    |
 
 With `filesystem`, `STORAGE_FILESYSTEM_PATH` sets the storage directory. It
 defaults to `./.storage`.

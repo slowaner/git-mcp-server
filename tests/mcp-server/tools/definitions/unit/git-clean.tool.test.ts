@@ -2,6 +2,7 @@
  * @fileoverview Unit tests for git-clean tool
  * @module tests/mcp-server/tools/definitions/unit/git-clean.tool.test
  */
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { container } from 'tsyringe';
 
@@ -41,7 +42,7 @@ describe('git_clean tool', () => {
 
     const tenantId = 'test-tenant';
     const context = createTestContext({ tenantId });
-    mockStorage.set(`session:workingDir:${tenantId}`, '/test/repo', context);
+    workingDirectoryStore(mockStorage, context).set('/test/repo');
   });
 
   describe('Input Schema', () => {

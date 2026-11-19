@@ -19,6 +19,11 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { randomUUID } from 'node:crypto';
+import { StorageService } from '@/storage/core/StorageService.js';
+import { InMemoryProvider } from '@/storage/providers/inMemory/inMemoryProvider.js';
+import { authContext } from '../auth/lib/authContext.js';
+import { hostPrincipal } from '../auth/lib/requestIdentity.js';
 
 import {
   ErrorHandler,
@@ -66,7 +71,18 @@ export async function startStdioTransport(
       'Connecting McpServer instance to StdioServerTransport...',
       operationContext,
     );
-    await server.connect(transport);
+    // This connection owns its cwd. Keeping it in memory avoids orphaned
+    // keys when the host disconnects or the STDIO process exits abruptly.
+    const session = {
+      principal: hostPrincipal,
+      sessionId: randomUUID(),
+      transport: 'stdio' as const,
+      stdioWorkingDirectoryStorage: new StorageService(new InMemoryProvider()),
+    };
+    await authContext.run(session, () => server.connect(transport));
+    const onmessage = transport.onmessage;
+    transport.onmessage = (message) =>
+      authContext.run(session, () => onmessage?.(message));
 
     logger.info(
       'MCP Server connected and listening via stdio transport.',

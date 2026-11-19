@@ -169,6 +169,13 @@ export const gitRemoteTool: ToolDefinition<
   inputSchema: InputSchema,
   outputSchema: OutputSchema,
   annotations: { readOnlyHint: false },
-  logic: withToolAuth(['tool:git:read'], createToolHandler(gitRemoteLogic)),
+  logic: withToolAuth<ToolInput, ToolOutput>(
+    (input) => [
+      input.mode === 'list' || input.mode === 'get-url'
+        ? 'tool:git:read'
+        : 'tool:git:write',
+    ],
+    createToolHandler(gitRemoteLogic),
+  ),
   responseFormatter,
 };

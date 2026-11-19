@@ -8,6 +8,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -222,7 +223,7 @@ describe('stdio multi-root paths', () => {
       await legacy.close();
     }
   }, 30_000);
-  it('revalidates a persisted cwd after a root is removed', async () => {
+  it('does not inherit a previous server session cwd after a root is removed', async () => {
     const storedEnv = {
       ...env,
       STORAGE_PROVIDER_TYPE: 'filesystem',
@@ -250,6 +251,9 @@ describe('stdio multi-root paths', () => {
     } finally {
       await writer.close();
     }
+    expect(readdirSync(join(storedEnv.STORAGE_FILESYSTEM_PATH, 'v2'))).toEqual(
+      [],
+    );
     try {
       await reader.connect(transport({ ...storedEnv, GIT_BASE_DIR: first }));
       const status = await reader.callTool({
@@ -257,7 +261,9 @@ describe('stdio multi-root paths', () => {
         arguments: { path: '.' },
       });
       expect(Boolean(status.isError)).toBe(true);
-      expect(JSON.stringify(status.content)).toContain('Path traversal');
+      expect(JSON.stringify(status.content)).toContain(
+        'No session working directory set',
+      );
     } finally {
       await reader.close();
     }

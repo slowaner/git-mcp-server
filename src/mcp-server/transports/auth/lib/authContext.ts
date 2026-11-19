@@ -9,14 +9,24 @@
  */
 import { AsyncLocalStorage } from 'async_hooks';
 
+import type { StorageService } from '@/storage/core/StorageService.js';
+import type { SessionWorkingDirectoryWrites } from '@/storage/core/sessionWorkingDirectoryStore.js';
+
 import type { AuthInfo } from './authTypes.js';
+import type { VerifiedPrincipal } from './verifiedPrincipal.js';
 
 /**
  * Defines the structure of the store used within the AsyncLocalStorage.
  * It holds the authentication information for the current request context.
  */
-interface AuthStore {
-  authInfo: AuthInfo;
+export interface AuthStore {
+  authInfo?: AuthInfo;
+  readonly principal?: VerifiedPrincipal;
+  readonly sessionId?: string;
+  readonly repositoryRoots?: readonly string[];
+  readonly transport?: 'http' | 'stdio';
+  readonly stdioWorkingDirectoryStorage?: StorageService;
+  readonly cwdWrites?: SessionWorkingDirectoryWrites;
 }
 
 /**

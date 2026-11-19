@@ -7,6 +7,7 @@
  */
 
 import type { StorageService } from '@/storage/core/StorageService.js';
+import { workingDirectoryStore } from '@/storage/core/sessionWorkingDirectoryStore.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { resolveGitPath } from './git-path-policy.js';
 import { repositoryRootsFromContext } from '@/services/git/core/configured-repository-policy.js';
@@ -16,14 +17,10 @@ import { logger, type RequestContext } from '@/utils/index.js';
  * Resolve working directory from session storage or direct path input.
  *
  * This utility handles the common pattern of accepting either:
- * - '.' to use the session working directory (stored per tenant)
+ * - '.' to use the working directory stored per principal and server session
  * - An absolute path to a specific git repository
  *
- * The working directory is stored in StorageService with the key pattern:
- * `session:workingDir:{tenantId}`
- *
- * Uses graceful degradation for tenantId: defaults to 'default-tenant' when
- * auth is disabled (development mode) or tenantId is not present.
+ * Legacy tenant-wide state is deliberately not read or migrated.
  *
  * @param pathInput - Path from tool input (either '.' or absolute path)
  * @param appContext - Request context (includes tenantId for multi-tenant storage)
@@ -68,10 +65,10 @@ export async function resolveWorkingDirectory(
       ...storageContext,
     });
 
-    const sessionWorkingDir = await storage.get<string>(
-      `session:workingDir:${tenantId}`,
+    const sessionWorkingDir = await workingDirectoryStore(
+      storage,
       storageContext,
-    );
+    ).get();
 
     if (!sessionWorkingDir) {
       throw new McpError(

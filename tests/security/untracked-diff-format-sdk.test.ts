@@ -103,7 +103,6 @@ describe(
         { mode: 0o700 },
       );
       Object.assign(config.git, {
-        executionProfile: 'trusted',
         binaryPath: binary,
         trustedHome: home,
         trustedPath: '/usr/bin:/bin',

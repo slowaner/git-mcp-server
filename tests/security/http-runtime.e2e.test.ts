@@ -33,6 +33,8 @@ for (const { runtime, authMode } of profiles) {
       );
       const repository = await mkdtemp(join(tmpdir(), 'git-http-runtime-'));
       const secret = 'synthetic-runtime-test-secret-material-only';
+      const issuer = 'https://issuer.example.test';
+      const audience = 'git-http-runtime';
       const token =
         authMode === 'jwt'
           ? await new SignJWT({
@@ -42,6 +44,8 @@ for (const { runtime, authMode } of profiles) {
               scp: ['tool:git:read'],
             })
               .setProtectedHeader({ alg: 'HS256' })
+              .setIssuer(issuer)
+              .setAudience(audience)
               .setIssuedAt()
               .setExpirationTime('5m')
               .sign(new TextEncoder().encode(secret))
@@ -60,6 +64,17 @@ for (const { runtime, authMode } of profiles) {
           MCP_ALLOWED_ORIGINS: 'https://client.example',
           MCP_AUTH_MODE: authMode,
           MCP_AUTH_SECRET_KEY: secret,
+          MCP_AUTH_ISSUER: issuer,
+          MCP_AUTH_AUDIENCE: audience,
+          MCP_REPOSITORY_GRANTS: JSON.stringify([
+            {
+              issuer,
+              clientId: 'runtime-test',
+              subject: 'runtime-test',
+              tenantId: 'test-tenant',
+              roots: [repository],
+            },
+          ]),
           MCP_HTTP_MAX_BODY_BYTES: '1024',
           MCP_LOG_LEVEL: 'error',
           OTEL_ENABLED: 'false',
